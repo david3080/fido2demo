@@ -1,0 +1,50 @@
+name: Build (iOS + macOS, unsigned)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.41.6'
+      - run: flutter pub get
+      - name: Build iOS (unsigned)
+        run: flutter build ios --release --no-codesign
+      - name: Package .ipa
+        run: |
+          cd build/ios/iphoneos
+          mkdir Payload
+          cp -r Runner.app Payload/
+          zip -qr fido2demo-ios.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fido2demo-ios
+          path: build/ios/iphoneos/fido2demo-ios.ipa
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.41.6'
+      - run: flutter config --enable-macos-desktop
+      - run: flutter pub get
+      - name: Build macOS
+        run: flutter build macos --release
+      - name: Package .app
+        run: |
+          cd build/macos/Build/Products/Release
+          zip -qr fido2demo-macos.zip *.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fido2demo-macos
+          path: build/macos/Build/Products/Release/fido2demo-macos.zip
