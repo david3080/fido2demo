@@ -88,10 +88,13 @@ class _LoginViewState extends State<LoginView> {
     try {
       await oidcManager.loginAuthorizationCodeFlow(options: _authOptions);
     } catch (e) {
-      if (!mounted) return;
-      final message = e is OidcException ? e.message : e.toString();
+      // ユーザーが認証画面 (ASWebAuthenticationSession) を閉じた場合は
+      // FlutterAppAuthUserCancelledException が伝播する。エラーではないので何も表示しない。
+      final cancelled =
+          e.toString().contains('FlutterAppAuthUserCancelledException');
+      if (cancelled || !mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('ログインに失敗しました: $message')),
+        const SnackBar(content: Text('ログインに失敗しました。もう一度お試しください。')),
       );
     } finally {
       if (mounted) setState(() => _busy = false);
