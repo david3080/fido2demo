@@ -1,4 +1,4 @@
-name: Build (iOS + macOS, unsigned)
+name: Build (iOS signed + macOS)
 
 on:
   workflow_dispatch:
@@ -15,18 +15,36 @@ jobs:
           channel: stable
           flutter-version: '3.41.6'
       - run: flutter pub get
-      - name: Build iOS (unsigned)
-        run: flutter build ios --release --no-codesign
-      - name: Package .ipa
+
+      - name: Import signing certificate & provisioning profile
+        env:
+          P12_BASE64: ${{ secrets.IOS_DIST_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.IOS_DIST_P12_PASSWORD }}
+          PROFILE_BASE64: ${{ secrets.IOS_PROVISION_PROFILE_BASE64 }}
         run: |
-          cd build/ios/iphoneos
-          mkdir Payload
-          cp -r Runner.app Payload/
-          zip -qr fido2demo-ios.ipa Payload
+          KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain
+          KEYCHAIN_PASSWORD=$(uuidgen)
+
+          echo "$P12_BASE64" | base64 --decode > $RUNNER_TEMP/dist.p12
+          echo "$PROFILE_BASE64" | base64 --decode > $RUNNER_TEMP/profile.mobileprovision
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import $RUNNER_TEMP/dist.p12 -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed s/\"//g)
+
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp $RUNNER_TEMP/profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
+
+      - name: Build signed .ipa
+        run: flutter build ipa --release --export-options-plist=ios/ExportOptions.plist
+
       - uses: actions/upload-artifact@v4
         with:
           name: fido2demo-ios
-          path: build/ios/iphoneos/fido2demo-ios.ipa
+          path: build/ios/ipa/*.ipa
 
   macos:
     runs-on: macos-latest
