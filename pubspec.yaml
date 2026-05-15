@@ -38,6 +38,7 @@ dependencies:
   oidc_default_store: ^0.6.0+2
   firebase_core: ^4.9.0
   firebase_messaging: ^16.2.2
+  http: ^1.6.0
 
 dev_dependencies:
   flutter_test:

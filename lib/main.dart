@@ -1,8 +1,10 @@
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:oidc/oidc.dart';
 import 'package:oidc_default_store/oidc_default_store.dart';
 
@@ -137,10 +139,55 @@ class _LoginViewState extends State<LoginView> {
   }
 }
 
-class UserView extends StatelessWidget {
+class UserView extends StatefulWidget {
   const UserView({super.key, required this.user});
 
   final OidcUser user;
+
+  @override
+  State<UserView> createState() => _UserViewState();
+}
+
+class _UserViewState extends State<UserView> {
+  String _fcmStatus = '初期化中…';
+
+  @override
+  void initState() {
+    super.initState();
+    _registerFcmToken();
+  }
+
+  Future<void> _registerFcmToken() async {
+    try {
+      final fcmToken = await FirebaseMessaging.instance.getToken();
+      if (fcmToken == null) {
+        if (mounted) setState(() => _fcmStatus = 'FCM token 取得失敗 (null)');
+        return;
+      }
+      final accessToken = widget.user.token.accessToken;
+      if (accessToken == null) {
+        if (mounted) setState(() => _fcmStatus = 'access_token 不在');
+        return;
+      }
+      final res = await http.post(
+        Uri.parse('https://oidc.sonrisa.co.jp/api/me/fcm-tokens'),
+        headers: {
+          'Authorization': 'Bearer $accessToken',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'token': fcmToken, 'platform': 'ios'}),
+      );
+      final preview = fcmToken.substring(0, math.min(20, fcmToken.length));
+      if (!mounted) return;
+      setState(() {
+        _fcmStatus = res.statusCode == 204
+            ? '登録成功 (token: $preview…)'
+            : '登録失敗 ${res.statusCode}: ${res.body}';
+      });
+    } catch (e) {
+      if (mounted) setState(() => _fcmStatus = 'エラー: $e');
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -148,22 +195,18 @@ class UserView extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        _DataCard(title: 'subject', body: user.uid ?? 'N/A'),
+        _DataCard(title: 'subject', body: widget.user.uid ?? 'N/A'),
         _DataCard(
           title: 'ID Token Claims',
-          body: encoder.convert(user.claims.toJson()),
+          body: encoder.convert(widget.user.claims.toJson()),
         ),
         _DataCard(
           title: 'UserInfo',
-          body: encoder.convert(user.userInfo),
+          body: encoder.convert(widget.user.userInfo),
         ),
-        // フェーズ2.2 Step1 デバッグ表示。後で OP に登録するロジックに置き換える。
-        FutureBuilder<String?>(
-          future: FirebaseMessaging.instance.getToken(),
-          builder: (context, snap) => _DataCard(
-            title: 'FCM Token (デバッグ表示)',
-            body: snap.data ?? (snap.hasError ? 'error: ${snap.error}' : '取得中…'),
-          ),
+        _DataCard(
+          title: 'FCM Token (CIBA Authentication Device 登録)',
+          body: _fcmStatus,
         ),
         const SizedBox(height: 8),
         FilledButton.tonalIcon(
