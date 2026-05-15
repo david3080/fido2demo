@@ -23,14 +23,16 @@ final oidcManager = OidcUserManager.lazy(
   ),
 );
 
-// iOS/macOS とも ASWebAuthenticationSession を使う。
-// この中で WebAuthn がネイティブ Passkey API (Face ID) に委譲される。
+// iOS/macOS とも ASWebAuthenticationSession を使う。中で WebAuthn が iOS の
+// ネイティブ Passkey API (Face ID) に委譲される。ephemeral mode を選び、
+// iOS 18 でデフォルトブラウザが Chrome 等の場合にサードパーティ
+// ブラウザのエンジンが選ばれる挙動を回避する (常に Safari エンジン)。
 const _authOptions = OidcPlatformSpecificOptions(
   ios: OidcPlatformSpecificOptions_AppAuth_IosMacos(
-    externalUserAgent: OidcAppAuthExternalUserAgent.asWebAuthenticationSession,
+    externalUserAgent: OidcAppAuthExternalUserAgent.ephemeralAsWebAuthenticationSession,
   ),
   macos: OidcPlatformSpecificOptions_AppAuth_IosMacos(
-    externalUserAgent: OidcAppAuthExternalUserAgent.asWebAuthenticationSession,
+    externalUserAgent: OidcAppAuthExternalUserAgent.ephemeralAsWebAuthenticationSession,
   ),
 );
 
