@@ -1,8 +1,12 @@
 import 'dart:convert';
 
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:oidc/oidc.dart';
 import 'package:oidc_default_store/oidc_default_store.dart';
+
+import 'firebase_options.dart';
 
 final oidcManager = OidcUserManager.lazy(
   discoveryDocumentUri: OidcUtils.getOpenIdConfigWellKnownUri(
@@ -32,6 +36,9 @@ const _authOptions = OidcPlatformSpecificOptions(
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  // CIBA Authentication Device 用に通知許可をリクエスト (iOS)
+  await FirebaseMessaging.instance.requestPermission();
   await oidcManager.init();
   runApp(const MyApp());
 }
@@ -147,6 +154,14 @@ class UserView extends StatelessWidget {
         _DataCard(
           title: 'UserInfo',
           body: encoder.convert(user.userInfo),
+        ),
+        // フェーズ2.2 Step1 デバッグ表示。後で OP に登録するロジックに置き換える。
+        FutureBuilder<String?>(
+          future: FirebaseMessaging.instance.getToken(),
+          builder: (context, snap) => _DataCard(
+            title: 'FCM Token (デバッグ表示)',
+            body: snap.data ?? (snap.hasError ? 'error: ${snap.error}' : '取得中…'),
+          ),
         ),
         const SizedBox(height: 8),
         FilledButton.tonalIcon(
