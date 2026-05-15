@@ -43,3 +43,12 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# 署名素材・秘密鍵類は誤って混入しないようブロック (実体は ~/fido2demo-signing/ で git 管理外)
+*.p12
+*.mobileprovision
+*.key
+*.pem
+*.cer
+.env*
+signing/
