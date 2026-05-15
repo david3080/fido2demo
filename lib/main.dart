@@ -7,12 +7,16 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:oidc/oidc.dart';
 import 'package:oidc_default_store/oidc_default_store.dart';
+import 'package:passkeys/authenticator.dart';
+import 'package:passkeys/types.dart';
 
 import 'firebase_options.dart';
 
+const _opBase = 'https://oidc.sonrisa.co.jp';
+
 final oidcManager = OidcUserManager.lazy(
   discoveryDocumentUri: OidcUtils.getOpenIdConfigWellKnownUri(
-    Uri.parse('https://oidc.sonrisa.co.jp/oidc'),
+    Uri.parse('$_opBase/oidc'),
   ),
   clientCredentials: const OidcClientAuthentication.none(clientId: 'mobile-rp'),
   store: OidcDefaultStore(),
@@ -20,15 +24,11 @@ final oidcManager = OidcUserManager.lazy(
     scope: const ['openid', 'profile', 'email', 'offline_access'],
     redirectUri: Uri.parse('jp.co.sonrisa.fido2demo://callback'),
     postLogoutRedirectUri: Uri.parse('jp.co.sonrisa.fido2demo://logout'),
-    // oidc パッケージは既定で userinfo を呼ばない。明示的に有効化する。
     userInfoSettings: const OidcUserInfoSettings(sendUserInfoRequest: true),
   ),
 );
 
-// iOS/macOS とも ASWebAuthenticationSession を使う。中で WebAuthn が iOS の
-// ネイティブ Passkey API (Face ID) に委譲される。ephemeral mode を選び、
-// iOS 18 でデフォルトブラウザが Chrome 等の場合にサードパーティ
-// ブラウザのエンジンが選ばれる挙動を回避する (常に Safari エンジン)。
+// ephemeral mode で iOS 18 のサードパーティブラウザ問題を回避し、常に Safari エンジンを使う。
 const _authOptions = OidcPlatformSpecificOptions(
   ios: OidcPlatformSpecificOptions_AppAuth_IosMacos(
     externalUserAgent: OidcAppAuthExternalUserAgent.ephemeralAsWebAuthenticationSession,
@@ -38,12 +38,38 @@ const _authOptions = OidcPlatformSpecificOptions(
   ),
 );
 
+/// CIBA: Mac (Consumption Device) からの保留中認証要求。FCM 通知から復元する。
+class PendingApproval {
+  PendingApproval({required this.authReqId, required this.clientName, required this.scope});
+  final String authReqId;
+  final String clientName;
+  final String scope;
+}
+
+final ValueNotifier<PendingApproval?> _pending = ValueNotifier(null);
+
+void _handleCibaMessage(RemoteMessage m) {
+  if (m.data['type'] != 'ciba_request') return;
+  final authReqId = m.data['auth_req_id'] as String?;
+  if (authReqId == null) return;
+  _pending.value = PendingApproval(
+    authReqId: authReqId,
+    clientName: (m.data['client_name'] as String?) ?? '?',
+    scope: (m.data['scope'] as String?) ?? '',
+  );
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  // CIBA Authentication Device 用に通知許可をリクエスト (iOS)
   await FirebaseMessaging.instance.requestPermission();
   await oidcManager.init();
+  // 通知ハンドラ登録 (フォアグラウンド + バックグラウンドから通知タップ)
+  FirebaseMessaging.onMessage.listen(_handleCibaMessage);
+  FirebaseMessaging.onMessageOpenedApp.listen(_handleCibaMessage);
+  // アプリ終了時から通知タップで起動した場合
+  final initial = await FirebaseMessaging.instance.getInitialMessage();
+  if (initial != null) _handleCibaMessage(initial);
   runApp(const MyApp());
 }
 
@@ -54,9 +80,7 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'fido2demo',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
-      ),
+      theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo)),
       home: const HomePage(),
     );
   }
@@ -69,17 +93,139 @@ class HomePage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('fido2demo — OIDC + Passkey')),
-      body: StreamBuilder<OidcUser?>(
-        stream: oidcManager.userChanges(),
-        initialData: oidcManager.currentUser,
-        builder: (context, snapshot) {
-          final user = snapshot.data;
-          if (user == null) {
-            return const LoginView();
-          }
-          return UserView(user: user);
-        },
+      body: Stack(
+        children: [
+          StreamBuilder<OidcUser?>(
+            stream: oidcManager.userChanges(),
+            initialData: oidcManager.currentUser,
+            builder: (context, snapshot) {
+              final user = snapshot.data;
+              return user == null ? const LoginView() : UserView(user: user);
+            },
+          ),
+          // 保留中の CIBA 承認要求があれば dialog を表示する
+          ValueListenableBuilder<PendingApproval?>(
+            valueListenable: _pending,
+            builder: (context, pending, _) {
+              if (pending == null) return const SizedBox.shrink();
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                _showApprovalDialog(context, pending);
+              });
+              return const SizedBox.shrink();
+            },
+          ),
+        ],
       ),
+    );
+  }
+}
+
+bool _dialogOpen = false;
+void _showApprovalDialog(BuildContext context, PendingApproval pending) {
+  if (_dialogOpen) return;
+  _dialogOpen = true;
+  showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) => ApprovalDialog(pending: pending),
+  ).whenComplete(() {
+    _dialogOpen = false;
+    _pending.value = null;
+  });
+}
+
+class ApprovalDialog extends StatefulWidget {
+  const ApprovalDialog({super.key, required this.pending});
+  final PendingApproval pending;
+  @override
+  State<ApprovalDialog> createState() => _ApprovalDialogState();
+}
+
+class _ApprovalDialogState extends State<ApprovalDialog> {
+  bool _busy = false;
+  String? _error;
+
+  Future<void> _approve() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      // 1. OP から Passkey options を取得 (allowCredentials を含む)
+      final optsRes = await http.post(
+        Uri.parse('$_opBase/interaction/ciba/${widget.pending.authReqId}/passkey-options'),
+        headers: {'Content-Type': 'application/json'},
+        body: '{}',
+      );
+      if (optsRes.statusCode != 200) {
+        throw Exception('options ${optsRes.statusCode}: ${optsRes.body}');
+      }
+      // 2. passkeys パッケージで iOS のネイティブ Passkey 認証 (Face ID)
+      final req = AuthenticateRequestType.fromJsonString(optsRes.body);
+      final resp = await PasskeyAuthenticator().authenticate(req);
+      // 3. assertion を OP に送って承認完了
+      final apprRes = await http.post(
+        Uri.parse('$_opBase/interaction/ciba/${widget.pending.authReqId}/approve'),
+        body: {'assertion': resp.toJsonString()},
+      );
+      if (apprRes.statusCode != 204) {
+        throw Exception('approve ${apprRes.statusCode}: ${apprRes.body}');
+      }
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('承認しました。Mac でログインが完了するはずです。')),
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _busy = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('ログイン承認'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('${widget.pending.clientName} からのログイン要求が届いています。'),
+          const SizedBox(height: 8),
+          Text(
+            'scope: ${widget.pending.scope}',
+            style: const TextStyle(fontSize: 12, color: Colors.black54),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 12),
+            SelectableText(
+              _error!,
+              style: const TextStyle(color: Colors.red, fontSize: 12),
+            ),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.of(context).pop(),
+          child: const Text('拒否'),
+        ),
+        FilledButton.icon(
+          onPressed: _busy ? null : _approve,
+          icon: _busy
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.fingerprint),
+          label: const Text('承認 (Passkey)'),
+        ),
+      ],
     );
   }
 }
@@ -99,10 +245,7 @@ class _LoginViewState extends State<LoginView> {
     try {
       await oidcManager.loginAuthorizationCodeFlow(options: _authOptions);
     } catch (e) {
-      // ユーザーが認証画面 (ASWebAuthenticationSession) を閉じた場合は
-      // FlutterAppAuthUserCancelledException が伝播する。エラーではないので何も表示しない。
-      final cancelled =
-          e.toString().contains('FlutterAppAuthUserCancelledException');
+      final cancelled = e.toString().contains('FlutterAppAuthUserCancelledException');
       if (cancelled || !mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('ログインに失敗しました。もう一度お試しください。')),
@@ -141,9 +284,7 @@ class _LoginViewState extends State<LoginView> {
 
 class UserView extends StatefulWidget {
   const UserView({super.key, required this.user});
-
   final OidcUser user;
-
   @override
   State<UserView> createState() => _UserViewState();
 }
@@ -170,7 +311,7 @@ class _UserViewState extends State<UserView> {
         return;
       }
       final res = await http.post(
-        Uri.parse('https://oidc.sonrisa.co.jp/api/me/fcm-tokens'),
+        Uri.parse('$_opBase/api/me/fcm-tokens'),
         headers: {
           'Authorization': 'Bearer $accessToken',
           'Content-Type': 'application/json',
@@ -200,10 +341,7 @@ class _UserViewState extends State<UserView> {
           title: 'ID Token Claims',
           body: encoder.convert(widget.user.claims.toJson()),
         ),
-        _DataCard(
-          title: 'UserInfo',
-          body: encoder.convert(widget.user.userInfo),
-        ),
+        _DataCard(title: 'UserInfo', body: encoder.convert(widget.user.userInfo)),
         _DataCard(
           title: 'FCM Token (CIBA Authentication Device 登録)',
           body: _fcmStatus,
@@ -221,7 +359,6 @@ class _UserViewState extends State<UserView> {
 
 class _DataCard extends StatelessWidget {
   const _DataCard({required this.title, required this.body});
-
   final String title;
   final String body;
 
