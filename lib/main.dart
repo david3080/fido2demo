@@ -348,7 +348,10 @@ class _UserViewState extends State<UserView> {
         ),
         const SizedBox(height: 8),
         FilledButton.tonalIcon(
-          onPressed: () => oidcManager.logout(),
+          // ログインと同じ ephemeral options を渡さないと iOS が
+          // 「サインインのために … を使用しようとしています」確認ダイアログを出す。
+          // flutter_appauth 公式ガイド準拠: end_session でも preferEphemeralSession を維持。
+          onPressed: () => oidcManager.logout(options: _authOptions),
           icon: const Icon(Icons.logout),
           label: const Text('ログアウト'),
         ),
