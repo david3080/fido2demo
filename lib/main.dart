@@ -28,8 +28,19 @@ final oidcManager = OidcUserManager.lazy(
   ),
 );
 
-// ephemeral mode で iOS 18 のサードパーティブラウザ問題を回避し、常に Safari エンジンを使う。
-const _authOptions = OidcPlatformSpecificOptions(
+// ログインは非 ephemeral: Safari の autofill 機構と統合され、WebAuthn Conditional UI
+// (パスキー候補の自動表示) が効くようになる。トレードオフとして Safari Cookie を共有する。
+const _loginOptions = OidcPlatformSpecificOptions(
+  ios: OidcPlatformSpecificOptions_AppAuth_IosMacos(
+    externalUserAgent: OidcAppAuthExternalUserAgent.asWebAuthenticationSession,
+  ),
+  macos: OidcPlatformSpecificOptions_AppAuth_IosMacos(
+    externalUserAgent: OidcAppAuthExternalUserAgent.asWebAuthenticationSession,
+  ),
+);
+
+// ログアウトは ephemeral: 「サインインのために … を使用しようとしています」確認ダイアログを抑制。
+const _logoutOptions = OidcPlatformSpecificOptions(
   ios: OidcPlatformSpecificOptions_AppAuth_IosMacos(
     externalUserAgent: OidcAppAuthExternalUserAgent.ephemeralAsWebAuthenticationSession,
   ),
@@ -243,7 +254,7 @@ class _LoginViewState extends State<LoginView> {
   Future<void> _login() async {
     setState(() => _busy = true);
     try {
-      await oidcManager.loginAuthorizationCodeFlow(options: _authOptions);
+      await oidcManager.loginAuthorizationCodeFlow(options: _loginOptions);
     } catch (e) {
       final cancelled = e.toString().contains('FlutterAppAuthUserCancelledException');
       if (cancelled || !mounted) return;
@@ -348,10 +359,7 @@ class _UserViewState extends State<UserView> {
         ),
         const SizedBox(height: 8),
         FilledButton.tonalIcon(
-          // ログインと同じ ephemeral options を渡さないと iOS が
-          // 「サインインのために … を使用しようとしています」確認ダイアログを出す。
-          // flutter_appauth 公式ガイド準拠: end_session でも preferEphemeralSession を維持。
-          onPressed: () => oidcManager.logout(options: _authOptions),
+          onPressed: () => oidcManager.logout(options: _logoutOptions),
           icon: const Icon(Icons.logout),
           label: const Text('ログアウト'),
         ),
