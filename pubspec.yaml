@@ -40,6 +40,7 @@ dependencies:
   firebase_messaging: ^16.2.2
   http: ^1.6.0
   passkeys: ^2.8.2
+  app_links: ^6.4.0
 
 dev_dependencies:
   flutter_test:

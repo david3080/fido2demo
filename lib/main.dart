@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:app_links/app_links.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
@@ -49,6 +50,19 @@ const _logoutOptions = OidcPlatformSpecificOptions(
   ),
 );
 
+/// Magic Link (Universal Link で受信) の token を保持する。
+/// HomePage がこれを監視して登録 dialog を表示する。
+final ValueNotifier<String?> _magicLinkToken = ValueNotifier(null);
+
+void _handleUniversalLink(Uri? uri) {
+  if (uri == null) return;
+  if (uri.host != 'oidc.sonrisa.co.jp') return;
+  if (uri.path != '/r') return;
+  final t = uri.queryParameters['t'];
+  if (t == null || t.isEmpty) return;
+  _magicLinkToken.value = t;
+}
+
 /// CIBA: Mac (Consumption Device) からの保留中認証要求。FCM 通知から復元する。
 class PendingApproval {
   PendingApproval({required this.authReqId, required this.clientName, required this.scope});
@@ -81,6 +95,13 @@ Future<void> main() async {
   // アプリ終了時から通知タップで起動した場合
   final initial = await FirebaseMessaging.instance.getInitialMessage();
   if (initial != null) _handleCibaMessage(initial);
+
+  // Universal Link (Magic Link メール内の URL から起動した場合 / バックグラウンド復帰)
+  final appLinks = AppLinks();
+  appLinks.uriLinkStream.listen(_handleUniversalLink);
+  final initialUri = await appLinks.getInitialLink();
+  if (initialUri != null) _handleUniversalLink(initialUri);
+
   runApp(const MyApp());
 }
 
@@ -125,6 +146,17 @@ class HomePage extends StatelessWidget {
               return const SizedBox.shrink();
             },
           ),
+          // Magic Link で起動した場合は Passkey 登録 dialog を表示する
+          ValueListenableBuilder<String?>(
+            valueListenable: _magicLinkToken,
+            builder: (context, token, _) {
+              if (token == null) return const SizedBox.shrink();
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                _showMagicLinkDialog(context, token);
+              });
+              return const SizedBox.shrink();
+            },
+          ),
         ],
       ),
     );
@@ -142,6 +174,20 @@ void _showApprovalDialog(BuildContext context, PendingApproval pending) {
   ).whenComplete(() {
     _dialogOpen = false;
     _pending.value = null;
+  });
+}
+
+bool _magicLinkDialogOpen = false;
+void _showMagicLinkDialog(BuildContext context, String token) {
+  if (_magicLinkDialogOpen) return;
+  _magicLinkDialogOpen = true;
+  showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) => MagicLinkDialog(token: token),
+  ).whenComplete(() {
+    _magicLinkDialogOpen = false;
+    _magicLinkToken.value = null;
   });
 }
 
@@ -287,8 +333,277 @@ class _LoginViewState extends State<LoginView> {
                 : const Icon(Icons.login),
             label: const Text('サインイン'),
           ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: _busy ? null : () => _openRegisterEmail(context),
+            icon: const Icon(Icons.mail_outline),
+            label: const Text('新規登録 (メアドで)'),
+          ),
         ],
       ),
+    );
+  }
+
+  void _openRegisterEmail(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (_) => const RegisterEmailDialog(),
+    );
+  }
+}
+
+/// 新規登録: メアド入力 → /api/register/email-challenge を呼んで Magic Link 送信
+class RegisterEmailDialog extends StatefulWidget {
+  const RegisterEmailDialog({super.key});
+  @override
+  State<RegisterEmailDialog> createState() => _RegisterEmailDialogState();
+}
+
+class _RegisterEmailDialogState extends State<RegisterEmailDialog> {
+  final _controller = TextEditingController();
+  bool _busy = false;
+  String? _error;
+  bool _sent = false;
+
+  Future<void> _send() async {
+    final email = _controller.text.trim();
+    if (email.isEmpty || !email.contains('@')) {
+      setState(() => _error = 'メアドを入力してください');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final res = await http.post(
+        Uri.parse('$_opBase/api/register/email-challenge'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'email': email}),
+      );
+      if (res.statusCode != 204) {
+        throw Exception('HTTP ${res.statusCode}: ${res.body}');
+      }
+      if (mounted) setState(() => _sent = true);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _busy = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_sent) {
+      return AlertDialog(
+        title: const Text('メールを送信しました'),
+        content: const Text(
+          '受信箱でメール内の「アプリで開く」ボタンをタップしてください。\n'
+          '有効期限は 15 分です。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('閉じる'),
+          ),
+        ],
+      );
+    }
+    return AlertDialog(
+      title: const Text('新規登録'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('メールアドレスを入力してください。確認メールを送信します。'),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _controller,
+            enabled: !_busy,
+            keyboardType: TextInputType.emailAddress,
+            autocorrect: false,
+            decoration: const InputDecoration(
+              hintText: 'you@example.com',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 8),
+            Text(_error!, style: const TextStyle(color: Colors.red, fontSize: 12)),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.of(context).pop(),
+          child: const Text('キャンセル'),
+        ),
+        FilledButton(
+          onPressed: _busy ? null : _send,
+          child: _busy
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('送信'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Magic Link tap で起動 → token を verify → email 取得 → Passkey 登録 → OIDC ログイン
+class MagicLinkDialog extends StatefulWidget {
+  const MagicLinkDialog({super.key, required this.token});
+  final String token;
+  @override
+  State<MagicLinkDialog> createState() => _MagicLinkDialogState();
+}
+
+class _MagicLinkDialogState extends State<MagicLinkDialog> {
+  bool _busy = false;
+  String? _email;
+  String? _verifiedToken;
+  String? _error;
+  String _status = 'メールアドレス確認中…';
+
+  @override
+  void initState() {
+    super.initState();
+    _verifyEmail();
+  }
+
+  Future<void> _verifyEmail() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final res = await http.post(
+        Uri.parse('$_opBase/api/register/verify-email'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'token': widget.token}),
+      );
+      if (res.statusCode == 409) {
+        throw Exception('このメアドは既に登録されています。サインインしてください。');
+      }
+      if (res.statusCode != 200) {
+        throw Exception('verify-email HTTP ${res.statusCode}: ${res.body}');
+      }
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      if (mounted) {
+        setState(() {
+          _email = body['email'] as String?;
+          _verifiedToken = body['verified_token'] as String?;
+          _status = '確認しました。Face ID で Passkey を作成してください。';
+          _busy = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _busy = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _registerPasskey() async {
+    if (_verifiedToken == null) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+      _status = 'Passkey を作成中…';
+    });
+    try {
+      // 1. registration options
+      final optsRes = await http.post(
+        Uri.parse('$_opBase/api/register/passkey-options'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'verified_token': _verifiedToken}),
+      );
+      if (optsRes.statusCode != 200) {
+        throw Exception('options HTTP ${optsRes.statusCode}: ${optsRes.body}');
+      }
+      // 2. iOS のネイティブ Passkey 作成 (Face ID)
+      final req = RegisterRequestType.fromJsonString(optsRes.body);
+      final resp = await PasskeyAuthenticator().register(req);
+      // 3. attestation を送信
+      final verifyRes = await http.post(
+        Uri.parse('$_opBase/api/register/passkey-verify'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'verified_token': _verifiedToken,
+          'attestation': jsonDecode(resp.toJsonString()),
+        }),
+      );
+      if (verifyRes.statusCode != 201) {
+        throw Exception('verify HTTP ${verifyRes.statusCode}: ${verifyRes.body}');
+      }
+      if (!mounted) return;
+      setState(() => _status = '登録完了。サインインします…');
+      Navigator.of(context).pop();
+      // 自動でサインイン: ASWebAuthenticationSession 経由で OIDC ログイン
+      await oidcManager.loginAuthorizationCodeFlow(options: _loginOptions);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _busy = false;
+          _status = 'エラーが発生しました';
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Passkey 登録'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (_email != null)
+            Text('メアド: $_email', style: const TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              if (_busy)
+                const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              if (_busy) const SizedBox(width: 8),
+              Expanded(child: Text(_status)),
+            ],
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 12),
+            SelectableText(
+              _error!,
+              style: const TextStyle(color: Colors.red, fontSize: 12),
+            ),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.of(context).pop(),
+          child: const Text('キャンセル'),
+        ),
+        FilledButton.icon(
+          onPressed: (_busy || _verifiedToken == null) ? null : _registerPasskey,
+          icon: const Icon(Icons.fingerprint),
+          label: const Text('Passkey 作成'),
+        ),
+      ],
     );
   }
 }
