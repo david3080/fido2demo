@@ -209,6 +209,33 @@ class _ApprovalDialogState extends State<ApprovalDialog> {
   bool _busy = false;
   String? _error;
 
+  Future<void> _reject() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final res = await http.post(
+        Uri.parse('$_opBase/interaction/ciba/${widget.pending.authReqId}/reject'),
+      );
+      if (res.statusCode != 204) {
+        throw Exception('reject ${res.statusCode}: ${res.body}');
+      }
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('拒否しました。要求元にも通知されます。')),
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _busy = false;
+        });
+      }
+    }
+  }
+
   Future<void> _approve() async {
     setState(() {
       _busy = true;
@@ -300,7 +327,7 @@ class _ApprovalDialogState extends State<ApprovalDialog> {
       ),
       actions: [
         TextButton(
-          onPressed: _busy ? null : () => Navigator.of(context).pop(),
+          onPressed: _busy ? null : _reject,
           child: const Text('拒否'),
         ),
         FilledButton.icon(
