@@ -65,10 +65,16 @@ void _handleUniversalLink(Uri? uri) {
 
 /// CIBA: Mac (Consumption Device) からの保留中認証要求。FCM 通知から復元する。
 class PendingApproval {
-  PendingApproval({required this.authReqId, required this.clientName, required this.scope});
+  PendingApproval({
+    required this.authReqId,
+    required this.clientName,
+    required this.scope,
+    required this.bindingMessage,
+  });
   final String authReqId;
   final String clientName;
   final String scope;
+  final String bindingMessage;
 }
 
 final ValueNotifier<PendingApproval?> _pending = ValueNotifier(null);
@@ -81,6 +87,7 @@ void _handleCibaMessage(RemoteMessage m) {
     authReqId: authReqId,
     clientName: (m.data['client_name'] as String?) ?? '?',
     scope: (m.data['scope'] as String?) ?? '',
+    bindingMessage: (m.data['binding_message'] as String?) ?? '',
   );
 }
 
@@ -252,6 +259,31 @@ class _ApprovalDialogState extends State<ApprovalDialog> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('${widget.pending.clientName} からのログイン要求が届いています。'),
+          if (widget.pending.bindingMessage.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade50,
+                border: Border.all(color: Colors.amber.shade400),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '内容を確認してください',
+                    style: TextStyle(fontSize: 11, color: Colors.brown, fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 4),
+                  SelectableText(
+                    widget.pending.bindingMessage,
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 8),
           Text(
             'scope: ${widget.pending.scope}',
