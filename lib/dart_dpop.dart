@@ -8,6 +8,9 @@
 /// - **Proof Generator** for low-level use (tests, manual flows)
 /// - **HTTP client middleware** (`DpopHttpClient extends http.BaseClient`)
 ///   with auto nonce retry
+///
+/// Default ES256 implementation: pointycastle (Pure Dart, runs on VM / Flutter / Web).
+/// Alternative: cryptography (Flutter only, ready for HW HSM via cryptography_flutter).
 library;
 
 export 'src/dpop_algorithm.dart';
@@ -15,3 +18,5 @@ export 'src/dpop_key.dart';
 export 'src/dpop_key_store.dart';
 export 'src/dpop_proof.dart';
 export 'src/dpop_http_client.dart';
+export 'src/impl/es256_pointycastle.dart';
+export 'src/impl/es256_cryptography.dart';

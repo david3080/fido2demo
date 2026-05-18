@@ -1,9 +1,6 @@
-@Tags(['flutter'])
-library;
-
-// cryptography パッケージの ES256 (Ecdsa.p256) は pure Dart VM では未実装。
-// Flutter (iOS / Android / Web) 環境でのみ動く。`dart test` での単体実行は
-// UnimplementedError になるため、Flutter app 側の integration_test で実行する。
+// デフォルト ES256 実装は pointycastle (Pure Dart) なので `dart test` で動く。
+// cryptography 版 (CryptographyEs256DpopKey) は Flutter 環境必須なので別途
+// integration_test で確認する。
 
 import 'dart:convert';
 
