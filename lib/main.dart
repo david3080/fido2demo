@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:app_links/app_links.dart';
+import 'package:dart_dpop/dart_dpop.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
@@ -15,19 +16,12 @@ import 'firebase_options.dart';
 
 const _opBase = 'https://oidc.sonrisa.co.jp';
 
-final oidcManager = OidcUserManager.lazy(
-  discoveryDocumentUri: OidcUtils.getOpenIdConfigWellKnownUri(
-    Uri.parse('$_opBase/oidc'),
-  ),
-  clientCredentials: const OidcClientAuthentication.none(clientId: 'mobile-rp'),
-  store: OidcDefaultStore(),
-  settings: OidcUserManagerSettings(
-    scope: const ['openid', 'profile', 'email', 'offline_access'],
-    redirectUri: Uri.parse('jp.co.sonrisa.fido2demo://callback'),
-    postLogoutRedirectUri: Uri.parse('jp.co.sonrisa.fido2demo://logout'),
-    userInfoSettings: const OidcUserInfoSettings(sendUserInfoRequest: true),
-  ),
-);
+// DPoP 用 ES256 鍵とそれを使う HTTP クライアント。
+// アプリ起動ごとに鍵を新規生成するため、再起動で進行中の access_token は無効化される
+// (= refresh も含めて再ログインが必要)。永続化は flutter_secure_storage で将来対応。
+late final DpopProofGenerator _dpopGen;
+late final DpopHttpClient _dpopClient;
+late final OidcUserManager oidcManager;
 
 // ログインは非 ephemeral: Safari の autofill 機構と統合され、WebAuthn Conditional UI
 // (パスキー候補の自動表示) が効くようになる。トレードオフとして Safari Cookie を共有する。
@@ -108,6 +102,27 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   await FirebaseMessaging.instance.requestPermission();
+
+  // DPoP 初期化 (oidcManager より先に作る必要あり: httpClient として注入するため)
+  final dpopKey = await Es256DpopKey.generate();
+  _dpopGen = DpopProofGenerator(key: dpopKey);
+  _dpopClient = DpopHttpClient(generator: _dpopGen);
+
+  oidcManager = OidcUserManager.lazy(
+    discoveryDocumentUri: OidcUtils.getOpenIdConfigWellKnownUri(
+      Uri.parse('$_opBase/oidc'),
+    ),
+    clientCredentials:
+        const OidcClientAuthentication.none(clientId: 'mobile-rp'),
+    store: OidcDefaultStore(),
+    httpClient: _dpopClient,
+    settings: OidcUserManagerSettings(
+      scope: const ['openid', 'profile', 'email', 'offline_access'],
+      redirectUri: Uri.parse('jp.co.sonrisa.fido2demo://callback'),
+      postLogoutRedirectUri: Uri.parse('jp.co.sonrisa.fido2demo://logout'),
+      userInfoSettings: const OidcUserInfoSettings(sendUserInfoRequest: true),
+    ),
+  );
   await oidcManager.init();
   // 通知ハンドラ登録 (フォアグラウンド + バックグラウンドから通知タップ)
   FirebaseMessaging.onMessage.listen(_handleCibaMessage);
@@ -134,8 +149,9 @@ Future<void> main() async {
 }
 
 /// FCM token をサーバに POST するヘルパー (UserView の _registerFcmToken と onTokenRefresh の両方から呼ぶ)。
+/// _dpopClient 経由なので Bearer は自動で DPoP に変換され proof が付与される。
 Future<void> _postFcmToken(String accessToken, String fcmToken) async {
-  await http
+  await _dpopClient
       .post(
         Uri.parse('$_opBase/api/me/fcm-tokens'),
         headers: {
@@ -783,7 +799,7 @@ class _UserViewState extends State<UserView> {
         if (mounted) setState(() => _fcmStatus = 'access_token 不在');
         return;
       }
-      final res = await http.post(
+      final res = await _dpopClient.post(
         Uri.parse('$_opBase/api/me/fcm-tokens'),
         headers: {
           'Authorization': 'Bearer $accessToken',
