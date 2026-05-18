@@ -359,7 +359,12 @@ class _LoginViewState extends State<LoginView> {
   Future<void> _login() async {
     setState(() => _busy = true);
     try {
-      await oidcManager.loginAuthorizationCodeFlow(options: _loginOptions);
+      // prompt=select_account: 既存の OIDC session cookie で skip させず、
+      // 複数 Passkey 登録時に iOS の選択 sheet で選べるようにする。
+      await oidcManager.loginAuthorizationCodeFlow(
+        options: _loginOptions,
+        promptOverride: const ['select_account'],
+      );
     } catch (e) {
       final cancelled = e.toString().contains('FlutterAppAuthUserCancelledException');
       if (cancelled || !mounted) return;
