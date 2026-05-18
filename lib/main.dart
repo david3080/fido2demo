@@ -122,7 +122,29 @@ Future<void> main() async {
   final initialUri = await appLinks.getInitialLink();
   if (initialUri != null) _handleUniversalLink(initialUri);
 
+  // FCM token rotation を自動追従。アプリが OIDC ログイン中なら新 token を
+  // サーバの replaceFcmToken に反映し、stale token に CIBA が届かない問題を防ぐ。
+  FirebaseMessaging.instance.onTokenRefresh.listen((newToken) async {
+    final accessToken = oidcManager.currentUser?.token.accessToken;
+    if (accessToken == null) return;
+    await _postFcmToken(accessToken, newToken).catchError((_) {});
+  });
+
   runApp(const MyApp());
+}
+
+/// FCM token をサーバに POST するヘルパー (UserView の _registerFcmToken と onTokenRefresh の両方から呼ぶ)。
+Future<void> _postFcmToken(String accessToken, String fcmToken) async {
+  await http
+      .post(
+        Uri.parse('$_opBase/api/me/fcm-tokens'),
+        headers: {
+          'Authorization': 'Bearer $accessToken',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'token': fcmToken, 'platform': 'ios'}),
+      )
+      .timeout(const Duration(seconds: 30));
 }
 
 class MyApp extends StatelessWidget {
