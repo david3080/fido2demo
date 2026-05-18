@@ -359,11 +359,13 @@ class _LoginViewState extends State<LoginView> {
   Future<void> _login() async {
     setState(() => _busy = true);
     try {
-      // prompt=select_account: 既存の OIDC session cookie で skip させず、
-      // 複数 Passkey 登録時に iOS の選択 sheet で選べるようにする。
+      // prompt=login: 既存の OIDC session cookie で skip させず必ず再認証。
+      // oidc-provider 9 は select_account を未サポートのため login を使う。
+      // 結果として Conditional UI が走り、複数 Passkey 登録時は iOS の
+      // 選択 sheet で候補から選べるようになる。
       await oidcManager.loginAuthorizationCodeFlow(
         options: _loginOptions,
-        promptOverride: const ['select_account'],
+        promptOverride: const ['login'],
       );
     } catch (e) {
       final cancelled = e.toString().contains('FlutterAppAuthUserCancelledException');
