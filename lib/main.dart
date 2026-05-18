@@ -531,27 +531,43 @@ class _RegisterEmailDialogState extends State<RegisterEmailDialog> {
     }
     return AlertDialog(
       title: const Text('新規登録'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('メールアドレスを入力してください。確認メールを送信します。'),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _controller,
-            enabled: !_busy,
-            keyboardType: TextInputType.emailAddress,
-            autocorrect: false,
-            decoration: const InputDecoration(
-              hintText: 'you@example.com',
-              border: OutlineInputBorder(),
+      // SingleChildScrollView でラップして、キーボード表示時に AlertDialog の
+      // content が縮んで error 文字が actions ボタンと重なる問題を回避する。
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('メールアドレスを入力してください。確認メールを送信します。'),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _controller,
+              enabled: !_busy,
+              keyboardType: TextInputType.emailAddress,
+              autocorrect: false,
+              decoration: const InputDecoration(
+                hintText: 'you@example.com',
+                border: OutlineInputBorder(),
+              ),
             ),
-          ),
-          if (_error != null) ...[
-            const SizedBox(height: 8),
-            Text(_error!, style: const TextStyle(color: Colors.red, fontSize: 12)),
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.red.shade50,
+                  border: Border.all(color: Colors.red.shade300),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  _error!,
+                  style: TextStyle(color: Colors.red.shade700, fontSize: 13),
+                ),
+              ),
+              const SizedBox(height: 4),
+            ],
           ],
-        ],
+        ),
       ),
       actions: [
         TextButton(
