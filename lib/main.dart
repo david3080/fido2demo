@@ -50,6 +50,19 @@ const _logoutOptions = OidcPlatformSpecificOptions(
   ),
 );
 
+// メアド簡易形式チェック (RFC 完全準拠ではなく実用範囲)。
+final RegExp _emailRegex = RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$');
+bool _isValidEmail(String s) => s.length <= 254 && _emailRegex.hasMatch(s);
+
+/// HTTP / ネットワーク例外を人間向けメッセージに変換する。
+String _humanizeError(Object e) {
+  final msg = e.toString();
+  if (msg.contains('TimeoutException')) return 'タイムアウトしました。インターネット接続を確認してください。';
+  if (msg.contains('SocketException') || msg.contains('Failed host lookup')) return 'ネットワークに接続できません。';
+  if (msg.contains('cancel') || msg.contains('Cancel')) return 'キャンセルされました。';
+  return msg.replaceFirst('Exception: ', '');
+}
+
 /// Magic Link (Universal Link で受信) の token を保持する。
 /// HomePage がこれを監視して登録 dialog を表示する。
 final ValueNotifier<String?> _magicLinkToken = ValueNotifier(null);
@@ -432,9 +445,17 @@ class _RegisterEmailDialogState extends State<RegisterEmailDialog> {
   bool _sent = false;
 
   Future<void> _send() async {
-    final email = _controller.text.trim();
-    if (email.isEmpty || !email.contains('@')) {
-      setState(() => _error = 'メアドを入力してください');
+    final email = _controller.text.trim().toLowerCase();
+    if (email.isEmpty) {
+      setState(() => _error = 'メールアドレスを入力してください');
+      return;
+    }
+    if (email.length > 254) {
+      setState(() => _error = 'メールアドレスが長すぎます (254 文字以内)');
+      return;
+    }
+    if (!_isValidEmail(email)) {
+      setState(() => _error = 'メールアドレスの形式が正しくありません (例: name@example.com)');
       return;
     }
     setState(() {
@@ -442,19 +463,27 @@ class _RegisterEmailDialogState extends State<RegisterEmailDialog> {
       _error = null;
     });
     try {
-      final res = await http.post(
-        Uri.parse('$_opBase/api/register/email-challenge'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'email': email}),
-      );
+      final res = await http
+          .post(
+            Uri.parse('$_opBase/api/register/email-challenge'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'email': email}),
+          )
+          .timeout(const Duration(seconds: 30));
+      if (res.statusCode == 429) {
+        throw Exception('リクエストが多すぎます。しばらくしてから再試行してください。');
+      }
+      if (res.statusCode >= 500) {
+        throw Exception('サーバが一時的に利用できません。しばらくしてから再試行してください。');
+      }
       if (res.statusCode != 204) {
-        throw Exception('HTTP ${res.statusCode}: ${res.body}');
+        throw Exception('予期しないエラー (HTTP ${res.statusCode})');
       }
       if (mounted) setState(() => _sent = true);
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = e.toString();
+          _error = _humanizeError(e);
           _busy = false;
         });
       }
@@ -549,16 +578,24 @@ class _MagicLinkDialogState extends State<MagicLinkDialog> {
       _error = null;
     });
     try {
-      final res = await http.post(
-        Uri.parse('$_opBase/api/register/verify-email'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'token': widget.token}),
-      );
+      final res = await http
+          .post(
+            Uri.parse('$_opBase/api/register/verify-email'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'token': widget.token}),
+          )
+          .timeout(const Duration(seconds: 30));
+      if (res.statusCode == 400) {
+        throw Exception('リンクの有効期限が切れたか、既に使用されています。もう一度メアドから送信してください。');
+      }
       if (res.statusCode == 409) {
-        throw Exception('このメアドは既に登録されています。サインインしてください。');
+        throw Exception('既に登録済みです。サインインしてください。');
+      }
+      if (res.statusCode >= 500) {
+        throw Exception('サーバが一時的に利用できません。');
       }
       if (res.statusCode != 200) {
-        throw Exception('verify-email HTTP ${res.statusCode}: ${res.body}');
+        throw Exception('予期しないエラー (HTTP ${res.statusCode})');
       }
       final body = jsonDecode(res.body) as Map<String, dynamic>;
       if (mounted) {
@@ -572,7 +609,7 @@ class _MagicLinkDialogState extends State<MagicLinkDialog> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = e.toString();
+          _error = _humanizeError(e);
           _busy = false;
         });
       }
@@ -587,39 +624,45 @@ class _MagicLinkDialogState extends State<MagicLinkDialog> {
       _status = 'Passkey を作成中…';
     });
     try {
-      // 1. registration options
-      final optsRes = await http.post(
-        Uri.parse('$_opBase/api/register/passkey-options'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'verified_token': _verifiedToken}),
-      );
-      if (optsRes.statusCode != 200) {
-        throw Exception('options HTTP ${optsRes.statusCode}: ${optsRes.body}');
+      final optsRes = await http
+          .post(
+            Uri.parse('$_opBase/api/register/passkey-options'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'verified_token': _verifiedToken}),
+          )
+          .timeout(const Duration(seconds: 30));
+      if (optsRes.statusCode == 401) {
+        throw Exception('登録セッションが切れました。最初からやり直してください。');
       }
-      // 2. iOS のネイティブ Passkey 作成 (Face ID)
+      if (optsRes.statusCode != 200) {
+        throw Exception('options 取得失敗 (HTTP ${optsRes.statusCode})');
+      }
       final req = RegisterRequestType.fromJsonString(optsRes.body);
       final resp = await PasskeyAuthenticator().register(req);
-      // 3. attestation を送信
-      final verifyRes = await http.post(
-        Uri.parse('$_opBase/api/register/passkey-verify'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'verified_token': _verifiedToken,
-          'attestation': jsonDecode(resp.toJsonString()),
-        }),
-      );
+      final verifyRes = await http
+          .post(
+            Uri.parse('$_opBase/api/register/passkey-verify'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'verified_token': _verifiedToken,
+              'attestation': jsonDecode(resp.toJsonString()),
+            }),
+          )
+          .timeout(const Duration(seconds: 30));
       if (verifyRes.statusCode != 201) {
-        throw Exception('verify HTTP ${verifyRes.statusCode}: ${verifyRes.body}');
+        throw Exception('Passkey 検証失敗 (HTTP ${verifyRes.statusCode})');
       }
       if (!mounted) return;
       setState(() => _status = '登録完了。サインインします…');
       Navigator.of(context).pop();
-      // 自動でサインイン: ASWebAuthenticationSession 経由で OIDC ログイン
-      await oidcManager.loginAuthorizationCodeFlow(options: _loginOptions);
+      await oidcManager.loginAuthorizationCodeFlow(
+        options: _loginOptions,
+        promptOverride: const ['login'],
+      );
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = e.toString();
+          _error = _humanizeError(e);
           _busy = false;
           _status = 'エラーが発生しました';
         });
