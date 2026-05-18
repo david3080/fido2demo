@@ -37,7 +37,11 @@ class DpopHttpClient extends http.BaseClient {
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
-    final accessToken = await _accessTokenProvider();
+    // 既存 Authorization: Bearer <token> ヘッダがあれば、その access_token を
+    // DPoP-bound として再利用する (oidc package など Bearer を自動付与する
+    // ライブラリと組み合わせるため)。なければ accessTokenProvider に fallback。
+    final accessToken =
+        _extractBearer(request.headers) ?? await _accessTokenProvider();
     final origin = _origin(request.url);
     var nonce = _nonces[origin];
 
@@ -80,10 +84,25 @@ class DpopHttpClient extends http.BaseClient {
       nonce: nonce,
     );
     clone.headers['DPoP'] = proof;
+    // Authorization は元が Bearer / 未設定のときだけ DPoP に置換する。
+    // Basic 等 (= token endpoint の client_secret_basic) は尊重して触らない。
     if (accessToken != null) {
-      clone.headers['Authorization'] = 'DPoP $accessToken';
+      final existing = _existingAuthScheme(original.headers);
+      if (existing == null || existing == 'bearer') {
+        clone.headers['Authorization'] = 'DPoP $accessToken';
+      }
     }
     return clone;
+  }
+
+  String? _existingAuthScheme(Map<String, String> headers) {
+    for (final entry in headers.entries) {
+      if (entry.key.toLowerCase() != 'authorization') continue;
+      final v = entry.value.trim();
+      final sp = v.indexOf(' ');
+      return (sp > 0 ? v.substring(0, sp) : v).toLowerCase();
+    }
+    return null;
   }
 
   /// `http.BaseRequest` のコピーを作る (本体だけシンプルなものに限定)。
@@ -102,6 +121,18 @@ class DpopHttpClient extends http.BaseClient {
       ..followRedirects = original.followRedirects;
     clone.headers.addAll(original.headers);
     return clone;
+  }
+
+  String? _extractBearer(Map<String, String> headers) {
+    for (final entry in headers.entries) {
+      if (entry.key.toLowerCase() != 'authorization') continue;
+      final value = entry.value;
+      if (value.toLowerCase().startsWith('bearer ')) {
+        return value.substring(7).trim();
+      }
+      return null;
+    }
+    return null;
   }
 
   String? _readNonce(Map<String, String> headers) {

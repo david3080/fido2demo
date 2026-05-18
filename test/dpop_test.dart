@@ -2,10 +2,30 @@
 // cryptography 版 (CryptographyEs256DpopKey) は Flutter 環境必須なので別途
 // integration_test で確認する。
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:dart_dpop/dart_dpop.dart';
+import 'package:http/http.dart' as http;
 import 'package:test/test.dart';
+
+/// 送信された http.Request をそのまま捕捉する fake client。
+/// レスポンスは常に 200 / 空 body を返す。
+class _CapturingClient extends http.BaseClient {
+  _CapturingClient(this.captured);
+  final List<http.Request> captured;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    // request は Request 型でくる前提 (= DpopHttpClient が clone)
+    captured.add(request as http.Request);
+    return http.StreamedResponse(
+      Stream.value(const <int>[]),
+      200,
+      headers: const {},
+    );
+  }
+}
 
 String _padBase64(String s) {
   final padding = (4 - s.length % 4) % 4;
@@ -136,6 +156,58 @@ void main() {
       await store.save(await Es256DpopKey.generate());
       await store.clear();
       expect(await store.load(), isNull);
+    });
+  });
+
+  group('DpopHttpClient Bearer→DPoP 自動変換', () {
+    test('Authorization: Bearer ヘッダから access_token を抽出し DPoP に変換', () async {
+      final captured = <http.Request>[];
+      final fake = _CapturingClient(captured);
+      final gen = DpopProofGenerator(key: await Es256DpopKey.generate());
+      final client = DpopHttpClient(generator: gen, inner: fake);
+      await client.get(
+        Uri.parse('https://example.com/me'),
+        headers: {'Authorization': 'Bearer abc.def.ghi'},
+      );
+      final sent = captured.single;
+      expect(sent.headers['Authorization'], 'DPoP abc.def.ghi');
+      expect(sent.headers['DPoP'], isNotEmpty);
+      final payload = _decodeJwtPart(sent.headers['DPoP']!.split('.')[1]);
+      // ath = base64url(SHA-256("abc.def.ghi")) のはず
+      expect(payload['ath'], isA<String>());
+    });
+
+    test('Authorization: Basic は尊重して触らない (cibademo の token endpoint 形式)',
+        () async {
+      final captured = <http.Request>[];
+      final fake = _CapturingClient(captured);
+      final gen = DpopProofGenerator(key: await Es256DpopKey.generate());
+      final client = DpopHttpClient(generator: gen, inner: fake);
+      await client.post(
+        Uri.parse('https://example.com/token'),
+        headers: {'Authorization': 'Basic Y2lkOnNlYw=='},
+        body: 'grant_type=client_credentials',
+      );
+      final sent = captured.single;
+      expect(sent.headers['Authorization'], 'Basic Y2lkOnNlYw==');
+      expect(sent.headers['DPoP'], isNotEmpty);
+      // accessToken は無いので ath は付かない
+      final payload = _decodeJwtPart(sent.headers['DPoP']!.split('.')[1]);
+      expect(payload['ath'], isNull);
+    });
+
+    test('Authorization ヘッダが無い場合は accessTokenProvider に fallback', () async {
+      final captured = <http.Request>[];
+      final fake = _CapturingClient(captured);
+      final gen = DpopProofGenerator(key: await Es256DpopKey.generate());
+      final client = DpopHttpClient(
+        generator: gen,
+        inner: fake,
+        accessTokenProvider: () async => 'provided-token',
+      );
+      await client.get(Uri.parse('https://example.com/me'));
+      final sent = captured.single;
+      expect(sent.headers['Authorization'], 'DPoP provided-token');
     });
   });
 
