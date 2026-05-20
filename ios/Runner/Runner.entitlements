@@ -4,7 +4,7 @@
 <dict>
 	<key>com.apple.developer.associated-domains</key>
 	<array>
-		<string>webcredentials:oidc.sonrisa.co.jp</string>
+		<string>webcredentials:oidc.sonrisa.co.jp?mode=developer</string>
 		<string>applinks:oidc.sonrisa.co.jp</string>
 	</array>
 	<key>aps-environment</key>
