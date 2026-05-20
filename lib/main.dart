@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -857,9 +856,11 @@ class _UserViewState extends State<UserView> {
   @override
   Widget build(BuildContext context) {
     const encoder = JsonEncoder.withIndent('  ');
-    return ListView(
+    return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
-      children: [
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
         _DataCard(
           key: _cursorTargetKeys['subject'],
           title: 'subject',
@@ -887,7 +888,8 @@ class _UserViewState extends State<UserView> {
           icon: const Icon(Icons.logout),
           label: const Text('ログアウト'),
         ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -937,7 +939,6 @@ class _CursorOverlayState extends State<CursorOverlay>
     with SingleTickerProviderStateMixin {
   String? _target;
   String _label = '';
-  Timer? _clearTimer;
   late final AnimationController _pulse;
 
   @override
@@ -953,7 +954,6 @@ class _CursorOverlayState extends State<CursorOverlay>
   @override
   void dispose() {
     _cursorCommand.removeListener(_onCommand);
-    _clearTimer?.cancel();
     _pulse.dispose();
     super.dispose();
   }
@@ -961,13 +961,10 @@ class _CursorOverlayState extends State<CursorOverlay>
   void _onCommand() {
     final cmd = _cursorCommand.value;
     if (cmd == null) return;
+    // 次の案内が来るまで表示し続ける (自動では消さない)。
     setState(() {
       _target = cmd.target;
       _label = cmd.label;
-    });
-    _clearTimer?.cancel();
-    _clearTimer = Timer(const Duration(seconds: 8), () {
-      if (mounted) setState(() => _target = null);
     });
     // 対象を画面内へスクロールして見せる。
     WidgetsBinding.instance.addPostFrameCallback((_) {
