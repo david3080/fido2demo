@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -98,6 +99,36 @@ void _handleCibaMessage(RemoteMessage m) {
   );
 }
 
+/// リモート支援デモ: CIBA 承認済みのオペレータ (Claude Code) から
+/// `type:'remote_cursor'` の data 通知を受けて、対象 widget にカーソル/ハイライトを出す。
+/// target はサーバ側 CURSOR_TARGETS と同じキー。
+class CursorCommand {
+  CursorCommand({required this.target, required this.label});
+  final String target;
+  final String label;
+}
+
+final ValueNotifier<CursorCommand?> _cursorCommand = ValueNotifier(null);
+
+/// 案内対象 widget に付ける GlobalKey。UserView 側でこのキーをカードやボタンに割り当てる。
+final Map<String, GlobalKey> _cursorTargetKeys = {
+  'subject': GlobalKey(),
+  'claims': GlobalKey(),
+  'userinfo': GlobalKey(),
+  'fcm': GlobalKey(),
+  'logout': GlobalKey(),
+};
+
+void _handleRemoteCursorMessage(RemoteMessage m) {
+  if (m.data['type'] != 'remote_cursor') return;
+  final target = m.data['target'] as String?;
+  if (target == null || !_cursorTargetKeys.containsKey(target)) return;
+  _cursorCommand.value = CursorCommand(
+    target: target,
+    label: (m.data['label'] as String?) ?? '',
+  );
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
@@ -127,6 +158,8 @@ Future<void> main() async {
   // 通知ハンドラ登録 (フォアグラウンド + バックグラウンドから通知タップ)
   FirebaseMessaging.onMessage.listen(_handleCibaMessage);
   FirebaseMessaging.onMessageOpenedApp.listen(_handleCibaMessage);
+  // リモート支援デモ: カーソル案内 (data-only, アプリ前面時に届く)
+  FirebaseMessaging.onMessage.listen(_handleRemoteCursorMessage);
   // アプリ終了時から通知タップで起動した場合
   final initial = await FirebaseMessaging.instance.getInitialMessage();
   if (initial != null) _handleCibaMessage(initial);
@@ -215,6 +248,8 @@ class HomePage extends StatelessWidget {
               return const SizedBox.shrink();
             },
           ),
+          // リモート支援: カーソル/ハイライトのオーバーレイ (タップは透過)
+          const Positioned.fill(child: IgnorePointer(child: CursorOverlay())),
         ],
       ),
     );
@@ -825,18 +860,29 @@ class _UserViewState extends State<UserView> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        _DataCard(title: 'subject', body: widget.user.uid ?? 'N/A'),
         _DataCard(
+          key: _cursorTargetKeys['subject'],
+          title: 'subject',
+          body: widget.user.uid ?? 'N/A',
+        ),
+        _DataCard(
+          key: _cursorTargetKeys['claims'],
           title: 'ID Token Claims',
           body: encoder.convert(widget.user.claims.toJson()),
         ),
-        _DataCard(title: 'UserInfo', body: encoder.convert(widget.user.userInfo)),
         _DataCard(
+          key: _cursorTargetKeys['userinfo'],
+          title: 'UserInfo',
+          body: encoder.convert(widget.user.userInfo),
+        ),
+        _DataCard(
+          key: _cursorTargetKeys['fcm'],
           title: 'FCM Token (CIBA Authentication Device 登録)',
           body: _fcmStatus,
         ),
         const SizedBox(height: 8),
         FilledButton.tonalIcon(
+          key: _cursorTargetKeys['logout'],
           onPressed: () => oidcManager.logout(options: _logoutOptions),
           icon: const Icon(Icons.logout),
           label: const Text('ログアウト'),
@@ -847,7 +893,7 @@ class _UserViewState extends State<UserView> {
 }
 
 class _DataCard extends StatelessWidget {
-  const _DataCard({required this.title, required this.body});
+  const _DataCard({super.key, required this.title, required this.body});
   final String title;
   final String body;
 
@@ -875,6 +921,126 @@ class _DataCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// リモート支援デモ: `_cursorCommand` を監視し、対象 widget (GlobalKey) の位置に
+/// ハイライト枠・ポインタ・説明ラベルを重ねて表示する。タップは透過 (IgnorePointer)。
+class CursorOverlay extends StatefulWidget {
+  const CursorOverlay({super.key});
+  @override
+  State<CursorOverlay> createState() => _CursorOverlayState();
+}
+
+class _CursorOverlayState extends State<CursorOverlay>
+    with SingleTickerProviderStateMixin {
+  Rect? _rect;
+  String _label = '';
+  Timer? _clearTimer;
+  late final AnimationController _pulse;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat(reverse: true);
+    _cursorCommand.addListener(_onCommand);
+  }
+
+  @override
+  void dispose() {
+    _cursorCommand.removeListener(_onCommand);
+    _clearTimer?.cancel();
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  void _onCommand() {
+    final cmd = _cursorCommand.value;
+    if (cmd == null) return;
+    // 対象 widget がレイアウト済みになってから位置を測る。
+    WidgetsBinding.instance.addPostFrameCallback((_) => _locate(cmd));
+  }
+
+  void _locate(CursorCommand cmd) {
+    final targetCtx = _cursorTargetKeys[cmd.target]?.currentContext;
+    final selfBox = context.findRenderObject() as RenderBox?;
+    if (targetCtx == null || selfBox == null || !selfBox.hasSize) return;
+    final targetBox = targetCtx.findRenderObject() as RenderBox?;
+    if (targetBox == null || !targetBox.hasSize) return;
+    // 対象の global 座標を、このオーバーレイのローカル座標に変換する。
+    final topLeft = selfBox.globalToLocal(targetBox.localToGlobal(Offset.zero));
+    if (!mounted) return;
+    setState(() {
+      _rect = topLeft & targetBox.size;
+      _label = cmd.label;
+    });
+    _clearTimer?.cancel();
+    _clearTimer = Timer(const Duration(seconds: 8), () {
+      if (mounted) setState(() => _rect = null);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final rect = _rect;
+    if (rect == null) return const SizedBox.shrink();
+    final primary = Theme.of(context).colorScheme.primary;
+    final labelAbove = rect.top > 56;
+    return Stack(
+      children: [
+        Positioned(
+          left: rect.left - 4,
+          top: rect.top - 4,
+          width: rect.width + 8,
+          height: rect.height + 8,
+          child: AnimatedBuilder(
+            animation: _pulse,
+            builder: (context, _) {
+              final t = _pulse.value;
+              return Container(
+                decoration: BoxDecoration(
+                  color: primary.withAlpha((30 + 30 * t).round()),
+                  border: Border.all(
+                    color: primary.withAlpha((128 + 127 * t).round()),
+                    width: 3,
+                  ),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              );
+            },
+          ),
+        ),
+        Positioned(
+          left: rect.left - 18,
+          top: rect.center.dy - 14,
+          child: Icon(Icons.touch_app, size: 32, color: primary),
+        ),
+        if (_label.isNotEmpty)
+          Positioned(
+            left: rect.left,
+            top: labelAbove ? rect.top - 44 : rect.bottom + 12,
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 280),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: primary,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                _label,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }
