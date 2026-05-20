@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:math' as math;
 
 import 'package:app_links/app_links.dart';
 import 'package:dart_dpop/dart_dpop.dart';
@@ -111,10 +110,10 @@ final ValueNotifier<CursorCommand?> _cursorCommand = ValueNotifier(null);
 
 /// 案内対象 widget に付ける GlobalKey。UserView 側でこのキーをカードやボタンに割り当てる。
 final Map<String, GlobalKey> _cursorTargetKeys = {
-  'subject': GlobalKey(),
-  'claims': GlobalKey(),
-  'userinfo': GlobalKey(),
-  'fcm': GlobalKey(),
+  'name': GlobalKey(),
+  'nickname': GlobalKey(),
+  'gender': GlobalKey(),
+  'birthdate': GlobalKey(),
   'logout': GlobalKey(),
 };
 
@@ -214,15 +213,24 @@ class HomePage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('fido2demo — OIDC + Passkey')),
-      body: Stack(
+      body: SafeArea(
+        child: Stack(
         children: [
           StreamBuilder<OidcUser?>(
             stream: oidcManager.userChanges(),
             initialData: oidcManager.currentUser,
             builder: (context, snapshot) {
               final user = snapshot.data;
-              return user == null ? const LoginView() : UserView(user: user);
+              if (user == null) {
+                // ログアウト時はカーソル案内を消す
+                if (_cursorCommand.value != null) {
+                  WidgetsBinding.instance.addPostFrameCallback(
+                    (_) => _cursorCommand.value = null,
+                  );
+                }
+                return const LoginView();
+              }
+              return UserView(user: user);
             },
           ),
           // 保留中の CIBA 承認要求があれば dialog を表示する
@@ -250,6 +258,7 @@ class HomePage extends StatelessWidget {
           // リモート支援: カーソル/ハイライトのオーバーレイ (タップは透過)
           const Positioned.fill(child: IgnorePointer(child: CursorOverlay())),
         ],
+        ),
       ),
     );
   }
@@ -813,27 +822,43 @@ class UserView extends StatefulWidget {
 }
 
 class _UserViewState extends State<UserView> {
-  String _fcmStatus = '初期化中…';
+  final _name = TextEditingController();
+  final _nickname = TextEditingController();
+  final _birthdate = TextEditingController();
+  String _gender = '';
+  bool _loading = true;
+  bool _saving = false;
+  String? _error;
 
   @override
   void initState() {
     super.initState();
-    _registerFcmToken();
+    _registerFcmToken(); // CIBA 通知用に裏で登録 (画面には出さない)
+    _loadProfile();
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _nickname.dispose();
+    _birthdate.dispose();
+    super.dispose();
+  }
+
+  String get _email {
+    final ui = widget.user.userInfo['email'];
+    if (ui is String && ui.isNotEmpty) return ui;
+    final c = widget.user.claims.toJson()['email'];
+    if (c is String && c.isNotEmpty) return c;
+    return widget.user.uid ?? '';
   }
 
   Future<void> _registerFcmToken() async {
     try {
       final fcmToken = await FirebaseMessaging.instance.getToken();
-      if (fcmToken == null) {
-        if (mounted) setState(() => _fcmStatus = 'FCM token 取得失敗 (null)');
-        return;
-      }
       final accessToken = widget.user.token.accessToken;
-      if (accessToken == null) {
-        if (mounted) setState(() => _fcmStatus = 'access_token 不在');
-        return;
-      }
-      final res = await _dpopClient.post(
+      if (fcmToken == null || accessToken == null) return;
+      await _dpopClient.post(
         Uri.parse('$_opBase/api/me/fcm-tokens'),
         headers: {
           'Authorization': 'Bearer $accessToken',
@@ -841,85 +866,202 @@ class _UserViewState extends State<UserView> {
         },
         body: jsonEncode({'token': fcmToken, 'platform': 'ios'}),
       );
-      final preview = fcmToken.substring(0, math.min(20, fcmToken.length));
+    } catch (_) {
+      // 失敗してもプロフィール画面は使えるので黙って無視。
+    }
+  }
+
+  Future<void> _loadProfile() async {
+    try {
+      final accessToken = widget.user.token.accessToken;
+      if (accessToken != null) {
+        final res = await _dpopClient.get(
+          Uri.parse('$_opBase/api/me/profile'),
+          headers: {'Authorization': 'Bearer $accessToken'},
+        );
+        if (res.statusCode == 200) {
+          final m = jsonDecode(res.body) as Map<String, dynamic>;
+          _name.text = (m['name'] as String?) ?? '';
+          _nickname.text = (m['nickname'] as String?) ?? '';
+          _birthdate.text = (m['birthdate'] as String?) ?? '';
+          _gender = (m['gender'] as String?) ?? '';
+        }
+      }
+    } catch (_) {
+      // 読めなくても空で編集開始できる。
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _save() async {
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final accessToken = widget.user.token.accessToken;
+      if (accessToken == null) {
+        throw Exception('セッションが切れました。ログインし直してください。');
+      }
+      final res = await _dpopClient.put(
+        Uri.parse('$_opBase/api/me/profile'),
+        headers: {
+          'Authorization': 'Bearer $accessToken',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'name': _name.text.trim(),
+          'nickname': _nickname.text.trim(),
+          'gender': _gender,
+          'birthdate': _birthdate.text.trim(),
+        }),
+      );
+      if (res.statusCode != 204) {
+        throw Exception('保存に失敗しました (HTTP ${res.statusCode})');
+      }
       if (!mounted) return;
-      setState(() {
-        _fcmStatus = res.statusCode == 204
-            ? '登録成功 (token: $preview…)'
-            : '登録失敗 ${res.statusCode}: ${res.body}';
-      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('プロフィールを保存しました')),
+      );
     } catch (e) {
-      if (mounted) setState(() => _fcmStatus = 'エラー: $e');
+      if (mounted) setState(() => _error = _humanizeError(e));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _pickBirthdate() async {
+    final parsed = DateTime.tryParse(_birthdate.text);
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: parsed ?? DateTime(2000, 1, 1),
+      firstDate: DateTime(1900),
+      lastDate: DateTime.now(),
+    );
+    if (picked != null) {
+      final y = picked.year.toString().padLeft(4, '0');
+      final m = picked.month.toString().padLeft(2, '0');
+      final d = picked.day.toString().padLeft(2, '0');
+      setState(() => _birthdate.text = '$y-$m-$d');
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    const encoder = JsonEncoder.withIndent('  ');
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-        _DataCard(
-          key: _cursorTargetKeys['subject'],
-          title: 'subject',
-          body: widget.user.uid ?? 'N/A',
-        ),
-        _DataCard(
-          key: _cursorTargetKeys['claims'],
-          title: 'ID Token Claims',
-          body: encoder.convert(widget.user.claims.toJson()),
-        ),
-        _DataCard(
-          key: _cursorTargetKeys['userinfo'],
-          title: 'UserInfo',
-          body: encoder.convert(widget.user.userInfo),
-        ),
-        _DataCard(
-          key: _cursorTargetKeys['fcm'],
-          title: 'FCM Token (CIBA Authentication Device 登録)',
-          body: _fcmStatus,
-        ),
-        const SizedBox(height: 8),
-        FilledButton.tonalIcon(
-          key: _cursorTargetKeys['logout'],
-          onPressed: () => oidcManager.logout(options: _logoutOptions),
-          icon: const Icon(Icons.logout),
-          label: const Text('ログアウト'),
-        ),
+          Text('プロフィール',
+              style: Theme.of(context).textTheme.headlineSmall),
+          const SizedBox(height: 2),
+          Text(_email, style: const TextStyle(color: Colors.black54)),
+          const SizedBox(height: 16),
+          _FieldCard(
+            key: _cursorTargetKeys['name'],
+            label: '氏名',
+            child: TextField(
+              controller: _name,
+              decoration: const InputDecoration(
+                  hintText: '未設定', border: OutlineInputBorder()),
+            ),
+          ),
+          _FieldCard(
+            key: _cursorTargetKeys['nickname'],
+            label: 'ニックネーム',
+            child: TextField(
+              controller: _nickname,
+              decoration: const InputDecoration(
+                  hintText: '未設定', border: OutlineInputBorder()),
+            ),
+          ),
+          _FieldCard(
+            key: _cursorTargetKeys['gender'],
+            label: '性別',
+            child: DropdownButtonFormField<String>(
+              initialValue: _gender.isEmpty ? null : _gender,
+              decoration: const InputDecoration(border: OutlineInputBorder()),
+              hint: const Text('未設定'),
+              items: const [
+                DropdownMenuItem(value: 'male', child: Text('男性')),
+                DropdownMenuItem(value: 'female', child: Text('女性')),
+                DropdownMenuItem(value: 'other', child: Text('その他')),
+              ],
+              onChanged: (v) => setState(() => _gender = v ?? ''),
+            ),
+          ),
+          _FieldCard(
+            key: _cursorTargetKeys['birthdate'],
+            label: '誕生日',
+            child: TextField(
+              controller: _birthdate,
+              readOnly: true,
+              onTap: _pickBirthdate,
+              decoration: const InputDecoration(
+                hintText: '未設定',
+                border: OutlineInputBorder(),
+                suffixIcon: Icon(Icons.calendar_today),
+              ),
+            ),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 4),
+            Text(_error!, style: const TextStyle(color: Colors.red, fontSize: 13)),
+          ],
+          const SizedBox(height: 8),
+          FilledButton.icon(
+            onPressed: _saving ? null : _save,
+            icon: _saving
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.save),
+            label: const Text('保存'),
+          ),
+          const SizedBox(height: 24),
+          FilledButton.tonalIcon(
+            key: _cursorTargetKeys['logout'],
+            onPressed: () => oidcManager.logout(options: _logoutOptions),
+            icon: const Icon(Icons.logout),
+            label: const Text('ログアウト'),
+          ),
         ],
       ),
     );
   }
 }
 
-class _DataCard extends StatelessWidget {
-  const _DataCard({super.key, required this.title, required this.body});
-  final String title;
-  final String body;
+/// プロフィール 1 項目分のカード (ラベル + 入力 widget)。カーソル案内の対象。
+class _FieldCard extends StatelessWidget {
+  const _FieldCard({super.key, required this.label, required this.child});
+  final String label;
+  final Widget child;
 
   @override
   Widget build(BuildContext context) {
     return Card(
-      margin: const EdgeInsets.only(bottom: 16),
+      margin: const EdgeInsets.only(bottom: 12),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              title,
+              label,
               style: Theme.of(context)
                   .textTheme
-                  .titleMedium
+                  .titleSmall
                   ?.copyWith(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
-            SelectableText(
-              body,
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-            ),
+            child,
           ],
         ),
       ),
