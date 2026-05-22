@@ -107,12 +107,18 @@ final Map<String, GlobalKey> _cursorTargetKeys = {
   'nickname': GlobalKey(),
   'gender': GlobalKey(),
   'birthdate': GlobalKey(),
+  'save': GlobalKey(),
   'logout': GlobalKey(),
 };
 
 void _handleRemoteCursorMessage(RemoteMessage m) {
   if (m.data['type'] != 'remote_cursor') return;
   final target = m.data['target'] as String?;
+  // target='none' は案内の解除 (clear_highlight)。表示中のカーソルを消す。
+  if (target == 'none') {
+    _cursorCommand.value = null;
+    return;
+  }
   if (target == null || !_cursorTargetKeys.containsKey(target)) return;
   _cursorCommand.value = CursorCommand(
     target: target,
@@ -1018,6 +1024,7 @@ class _UserViewState extends State<UserView> {
           ],
           const SizedBox(height: 8),
           FilledButton.icon(
+            key: _cursorTargetKeys['save'],
             onPressed: _saving ? null : _save,
             icon: _saving
                 ? const SizedBox(
