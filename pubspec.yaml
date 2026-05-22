@@ -39,7 +39,7 @@ dependencies:
   firebase_core: ^4.9.0
   firebase_messaging: ^16.2.2
   http: ^1.6.0
-  passkeys: ^2.8.2
+  passkeys: ^2.19.0
   app_links: ^6.4.0
   dart_dpop:
     git:
