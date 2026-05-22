@@ -1115,7 +1115,14 @@ class _CursorOverlayState extends State<CursorOverlay>
 
   void _onCommand() {
     final cmd = _cursorCommand.value;
-    if (cmd == null) return;
+    // null は案内の解除 (clear_highlight / target='none')。表示中の枠を消す。
+    if (cmd == null) {
+      setState(() {
+        _target = null;
+        _label = '';
+      });
+      return;
+    }
     // 次の案内が来るまで表示し続ける (自動では消さない)。
     setState(() {
       _target = cmd.target;
