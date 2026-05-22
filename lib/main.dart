@@ -28,16 +28,9 @@ const _loginOptions = OidcPlatformSpecificOptions(
   ios: OidcPlatformSpecificOptions_AppAuth_IosMacos(
     externalUserAgent: OidcAppAuthExternalUserAgent.asWebAuthenticationSession,
   ),
-  macos: OidcPlatformSpecificOptions_AppAuth_IosMacos(
-    externalUserAgent: OidcAppAuthExternalUserAgent.asWebAuthenticationSession,
-  ),
-);
-
-// ログアウトは ephemeral: 「サインインのために … を使用しようとしています」確認ダイアログを抑制。
-const _logoutOptions = OidcPlatformSpecificOptions(
-  ios: OidcPlatformSpecificOptions_AppAuth_IosMacos(
-    externalUserAgent: OidcAppAuthExternalUserAgent.ephemeralAsWebAuthenticationSession,
-  ),
+  // macOS は ephemeral にして、ユーザーの通常 Safari ではなく隔離された
+  // ASWebAuthenticationSession ウィンドウを使う (外部ブラウザ起動を避ける)。
+  // パスキーは OS のプロバイダ経由なので ephemeral でも認証できる。
   macos: OidcPlatformSpecificOptions_AppAuth_IosMacos(
     externalUserAgent: OidcAppAuthExternalUserAgent.ephemeralAsWebAuthenticationSession,
   ),
@@ -1038,7 +1031,10 @@ class _UserViewState extends State<UserView> {
           const SizedBox(height: 24),
           FilledButton.tonalIcon(
             key: _cursorTargetKeys['logout'],
-            onPressed: () => oidcManager.logout(options: _logoutOptions),
+            // ブラウザを開く RP-initiated ログアウトではなくローカルでトークンを破棄する。
+            // ログインは毎回 prompt=login を強制するため、OP セッションが残っても
+            // 勝手な自動ログインは起きない (= ブラウザの点滅を無くせる)。
+            onPressed: () => oidcManager.forgetUser(),
             icon: const Icon(Icons.logout),
             label: const Text('ログアウト'),
           ),
