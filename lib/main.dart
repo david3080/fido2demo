@@ -130,7 +130,13 @@ void _handleRemoteCursorMessage(RemoteMessage m) {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  await FirebaseMessaging.instance.requestPermission();
+  // macOS など通知認可が取得できない環境でも起動を止めない (例外で runApp 前に
+  // 落ちると黒画面になるため)。CIBA プッシュは認可が取れた環境でのみ届く。
+  try {
+    await FirebaseMessaging.instance.requestPermission();
+  } catch (e) {
+    debugPrint('FCM requestPermission failed (continuing): $e');
+  }
 
   // DPoP 初期化 (oidcManager より先に作る必要あり: httpClient として注入するため)
   final dpopKey = await Es256DpopKey.generate();
@@ -159,8 +165,12 @@ Future<void> main() async {
   // リモート支援デモ: カーソル案内 (data-only, アプリ前面時に届く)
   FirebaseMessaging.onMessage.listen(_handleRemoteCursorMessage);
   // アプリ終了時から通知タップで起動した場合
-  final initial = await FirebaseMessaging.instance.getInitialMessage();
-  if (initial != null) _handleCibaMessage(initial);
+  try {
+    final initial = await FirebaseMessaging.instance.getInitialMessage();
+    if (initial != null) _handleCibaMessage(initial);
+  } catch (e) {
+    debugPrint('FCM getInitialMessage failed (continuing): $e');
+  }
 
   // Universal Link (Magic Link メール内の URL から起動した場合 / バックグラウンド復帰)
   final appLinks = AppLinks();
