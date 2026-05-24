@@ -22,15 +22,16 @@ late final DpopProofGenerator _dpopGen;
 late final DpopHttpClient _dpopClient;
 late final OidcUserManager oidcManager;
 
-// ログインは非 ephemeral: Safari の autofill 機構と統合され、WebAuthn Conditional UI
-// (パスキー候補の自動表示) が効くようになる。トレードオフとして Safari Cookie を共有する。
+// iOS/macOS とも ephemeral ASWebAuthenticationSession を使う。
+// Safari と Cookie を共有しない使い捨てセッションなので、iOS の
+// 「"oidc.sonrisa.co.jp" を使用しようとしています」確認ダイアログが出ない。
+// パスキーは OS のプロバイダ(iCloud キーチェーン等)経由なので ephemeral でも認証可能。
+// OP 側のログイン画面は discoverable のモーダルピッカー方式に変えたため、
+// Safari autofill 統合(非 ephemeral)はもう不要。
 const _loginOptions = OidcPlatformSpecificOptions(
   ios: OidcPlatformSpecificOptions_AppAuth_IosMacos(
-    externalUserAgent: OidcAppAuthExternalUserAgent.asWebAuthenticationSession,
+    externalUserAgent: OidcAppAuthExternalUserAgent.ephemeralAsWebAuthenticationSession,
   ),
-  // macOS は ephemeral にして、ユーザーの通常 Safari ではなく隔離された
-  // ASWebAuthenticationSession ウィンドウを使う (外部ブラウザ起動を避ける)。
-  // パスキーは OS のプロバイダ経由なので ephemeral でも認証できる。
   macos: OidcPlatformSpecificOptions_AppAuth_IosMacos(
     externalUserAgent: OidcAppAuthExternalUserAgent.ephemeralAsWebAuthenticationSession,
   ),
