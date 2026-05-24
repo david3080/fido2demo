@@ -22,17 +22,14 @@ late final DpopProofGenerator _dpopGen;
 late final DpopHttpClient _dpopClient;
 late final OidcUserManager oidcManager;
 
-// iOS/macOS とも ephemeral ASWebAuthenticationSession を使う。
+// iOS は ephemeral ASWebAuthenticationSession を使う。
 // Safari と Cookie を共有しない使い捨てセッションなので、iOS の
 // 「"oidc.sonrisa.co.jp" を使用しようとしています」確認ダイアログが出ない。
 // パスキーは OS のプロバイダ(iCloud キーチェーン等)経由なので ephemeral でも認証可能。
-// OP 側のログイン画面は discoverable のモーダルピッカー方式に変えたため、
-// Safari autofill 統合(非 ephemeral)はもう不要。
+// （macOS は ASWebAuthenticationSession が別ウィンドウになり passkey を
+//  アプリ内に収められないため、対象から外した。）
 const _loginOptions = OidcPlatformSpecificOptions(
   ios: OidcPlatformSpecificOptions_AppAuth_IosMacos(
-    externalUserAgent: OidcAppAuthExternalUserAgent.ephemeralAsWebAuthenticationSession,
-  ),
-  macos: OidcPlatformSpecificOptions_AppAuth_IosMacos(
     externalUserAgent: OidcAppAuthExternalUserAgent.ephemeralAsWebAuthenticationSession,
   ),
 );
