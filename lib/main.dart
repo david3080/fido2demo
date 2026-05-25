@@ -883,15 +883,17 @@ class _UserViewState extends State<UserView> {
       final accessToken = widget.user.token.accessToken;
       if (accessToken != null) {
         final res = await _dpopClient.get(
-          Uri.parse('$_opBase/api/me/profile'),
+          Uri.parse('$_opBase/oidc/profile'),
           headers: {'Authorization': 'Bearer $accessToken'},
         );
         if (res.statusCode == 200) {
+          // レスポンスは {sub, editable_fields, profile:{...}} 形式。
           final m = jsonDecode(res.body) as Map<String, dynamic>;
-          _name.text = (m['name'] as String?) ?? '';
-          _nickname.text = (m['nickname'] as String?) ?? '';
-          _birthdate.text = (m['birthdate'] as String?) ?? '';
-          _gender = (m['gender'] as String?) ?? '';
+          final p = (m['profile'] as Map?) ?? const {};
+          _name.text = (p['name'] as String?) ?? '';
+          _nickname.text = (p['nickname'] as String?) ?? '';
+          _birthdate.text = (p['birthdate'] as String?) ?? '';
+          _gender = (p['gender'] as String?) ?? '';
         }
       }
     } catch (_) {
@@ -912,7 +914,7 @@ class _UserViewState extends State<UserView> {
         throw Exception('セッションが切れました。ログインし直してください。');
       }
       final res = await _dpopClient.put(
-        Uri.parse('$_opBase/api/me/profile'),
+        Uri.parse('$_opBase/oidc/profile'),
         headers: {
           'Authorization': 'Bearer $accessToken',
           'Content-Type': 'application/json',
@@ -924,7 +926,7 @@ class _UserViewState extends State<UserView> {
           'birthdate': _birthdate.text.trim(),
         }),
       );
-      if (res.statusCode != 204) {
+      if (res.statusCode != 200) {
         throw Exception('保存に失敗しました (HTTP ${res.statusCode})');
       }
       if (!mounted) return;
