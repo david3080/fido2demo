@@ -553,7 +553,7 @@ class _RegisterEmailDialogState extends State<RegisterEmailDialog> {
     try {
       final res = await http
           .post(
-            Uri.parse('$_opBase/api/register/email-challenge'),
+            Uri.parse('$_opBase/oidc/register/email-challenge'),
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({'email': email}),
           )
@@ -684,7 +684,7 @@ class _MagicLinkDialogState extends State<MagicLinkDialog> {
     try {
       final res = await http
           .post(
-            Uri.parse('$_opBase/api/register/verify-email'),
+            Uri.parse('$_opBase/oidc/register/verify-email'),
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({'token': widget.token}),
           )
@@ -730,9 +730,9 @@ class _MagicLinkDialogState extends State<MagicLinkDialog> {
     try {
       final optsRes = await http
           .post(
-            Uri.parse('$_opBase/api/register/passkey-options'),
+            Uri.parse('$_opBase/oidc/register/passkey/options'),
             headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'verified_token': _verifiedToken}),
+            body: jsonEncode({'token': _verifiedToken}),
           )
           .timeout(const Duration(seconds: 30));
       if (optsRes.statusCode == 401) {
@@ -743,13 +743,16 @@ class _MagicLinkDialogState extends State<MagicLinkDialog> {
       }
       final req = RegisterRequestType.fromJsonString(optsRes.body);
       final resp = await PasskeyAuthenticator().register(req);
+      // passkeys の resp は {id,rawId,type,response:{clientDataJSON,attestationObject},...}。
+      // Rust は {token, response:{clientDataJSON, attestationObject}} を受ける。
+      final respMap = jsonDecode(resp.toJsonString()) as Map<String, dynamic>;
       final verifyRes = await http
           .post(
-            Uri.parse('$_opBase/api/register/passkey-verify'),
+            Uri.parse('$_opBase/oidc/register/passkey/verify'),
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({
-              'verified_token': _verifiedToken,
-              'attestation': jsonDecode(resp.toJsonString()),
+              'token': _verifiedToken,
+              'response': respMap['response'],
             }),
           )
           .timeout(const Duration(seconds: 30));
