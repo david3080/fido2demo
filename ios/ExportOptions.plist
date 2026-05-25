@@ -13,7 +13,7 @@
 	<key>provisioningProfiles</key>
 	<dict>
 		<key>jp.co.sonrisa.fido2demo</key>
-		<string>fido2demo Ad Hoc</string>
+		<string>fido2demo_Ad_Hoc</string>
 	</dict>
 	<key>stripSwiftSymbols</key>
 	<true/>
