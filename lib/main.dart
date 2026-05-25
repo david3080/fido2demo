@@ -191,7 +191,7 @@ Future<void> main() async {
 Future<void> _postFcmToken(String accessToken, String fcmToken) async {
   await _dpopClient
       .post(
-        Uri.parse('$_opBase/api/me/fcm-tokens'),
+        Uri.parse('$_opBase/oidc/me/fcm-tokens'),
         headers: {
           'Authorization': 'Bearer $accessToken',
           'Content-Type': 'application/json',
@@ -316,8 +316,12 @@ class _ApprovalDialogState extends State<ApprovalDialog> {
       _error = null;
     });
     try {
-      final res = await http.post(
-        Uri.parse('$_opBase/interaction/ciba/${widget.pending.authReqId}/reject'),
+      final accessToken = oidcManager.currentUser?.token.accessToken;
+      // _dpopClient が Bearer を DPoP に変換し proof を付与する。承認主体は
+      // access token から特定される（サーバ側 ciba_actor、cookie 不要）。
+      final res = await _dpopClient.post(
+        Uri.parse('$_opBase/oidc/ciba/${widget.pending.authReqId}/reject'),
+        headers: {'Authorization': 'Bearer $accessToken'},
       );
       if (res.statusCode != 204) {
         throw Exception('reject ${res.statusCode}: ${res.body}');
@@ -343,10 +347,11 @@ class _ApprovalDialogState extends State<ApprovalDialog> {
       _error = null;
     });
     try {
-      // 1. OP から Passkey options を取得 (allowCredentials を含む)
-      final optsRes = await http.post(
-        Uri.parse('$_opBase/interaction/ciba/${widget.pending.authReqId}/passkey-options'),
-        headers: {'Content-Type': 'application/json'},
+      final accessToken = oidcManager.currentUser?.token.accessToken;
+      // 1. OP から Passkey options を取得 (access token + DPoP, allowCredentials を含む)
+      final optsRes = await _dpopClient.post(
+        Uri.parse('$_opBase/oidc/ciba/${widget.pending.authReqId}/passkey-options'),
+        headers: {'Authorization': 'Bearer $accessToken', 'Content-Type': 'application/json'},
         body: '{}',
       );
       if (optsRes.statusCode != 200) {
@@ -355,12 +360,14 @@ class _ApprovalDialogState extends State<ApprovalDialog> {
       // 2. passkeys パッケージで iOS のネイティブ Passkey 認証 (Face ID)
       final req = AuthenticateRequestType.fromJsonString(optsRes.body);
       final resp = await PasskeyAuthenticator().authenticate(req);
-      // 3. assertion を OP に送って承認完了
-      final apprRes = await http.post(
-        Uri.parse('$_opBase/interaction/ciba/${widget.pending.authReqId}/approve'),
-        body: {'assertion': resp.toJsonString()},
+      // 3. assertion を OP に送って承認完了。Rust は {id, response:{...}} を受け 200 を返す。
+      final respMap = jsonDecode(resp.toJsonString()) as Map<String, dynamic>;
+      final apprRes = await _dpopClient.post(
+        Uri.parse('$_opBase/oidc/ciba/${widget.pending.authReqId}/approve'),
+        headers: {'Authorization': 'Bearer $accessToken', 'Content-Type': 'application/json'},
+        body: jsonEncode({'id': respMap['id'], 'response': respMap['response']}),
       );
-      if (apprRes.statusCode != 204) {
+      if (apprRes.statusCode != 200) {
         throw Exception('approve ${apprRes.statusCode}: ${apprRes.body}');
       }
       if (!mounted) return;
@@ -869,7 +876,7 @@ class _UserViewState extends State<UserView> {
       final accessToken = widget.user.token.accessToken;
       if (fcmToken == null || accessToken == null) return;
       await _dpopClient.post(
-        Uri.parse('$_opBase/api/me/fcm-tokens'),
+        Uri.parse('$_opBase/oidc/me/fcm-tokens'),
         headers: {
           'Authorization': 'Bearer $accessToken',
           'Content-Type': 'application/json',
