@@ -24,11 +24,8 @@ import 'validators.dart';
 // DPoP 用 ES256 鍵とそれを使う HTTP クライアント。
 // 鍵は flutter_secure_storage に永続化し（_loadOrCreateDpopKey）、再起動/FCM
 // コールド起動後も同じ鍵 = 既存 access_token (cnf.jkt) を有効に保つ。
-// oidcManager/_dpopClient は providers の oidcManagerProvider/dpopClientProvider
-// にも override で注入し、宣言的 UI 側は ref 経由で参照する。
-late final DpopProofGenerator _dpopGen;
-late final DpopHttpClient _dpopClient;
-late final OidcUserManager oidcManager;
+// ref.read(oidcManagerProvider)/dpopClient は main で生成し providers に override 注入する。
+// 宣言的 UI 側は ref(oidcManagerProvider/dpopClientProvider) で参照する。
 
 // iOS は ephemeral ASWebAuthenticationSession を使う。
 // Safari と Cookie を共有しない使い捨てセッションなので、iOS の
@@ -120,21 +117,21 @@ Future<void> main() async {
     debugPrint('FCM requestPermission failed (continuing): $e');
   }
 
-  // DPoP 初期化 (oidcManager より先に作る必要あり: httpClient として注入するため)。
+  // DPoP 初期化 (manager より先に作る必要あり: httpClient として注入するため)。
   // 鍵は flutter_secure_storage に永続化し、再起動/FCM 起動後も同じ鍵を使う。
   // 起動ごとに鍵が変わると既存 access_token (cnf.jkt) が無効化され 401 になるのを防ぐ。
   final dpopKey = await _loadOrCreateDpopKey();
-  _dpopGen = DpopProofGenerator(key: dpopKey);
-  _dpopClient = DpopHttpClient(generator: _dpopGen);
+  final dpopGen = DpopProofGenerator(key: dpopKey);
+  final dpopClient = DpopHttpClient(generator: dpopGen);
 
-  oidcManager = OidcUserManager.lazy(
+  final manager = OidcUserManager.lazy(
     discoveryDocumentUri: OidcUtils.getOpenIdConfigWellKnownUri(
       Uri.parse('$opBase/oidc'),
     ),
     clientCredentials:
         const OidcClientAuthentication.none(clientId: 'mobile-rp'),
     store: OidcDefaultStore(),
-    httpClient: _dpopClient,
+    httpClient: dpopClient,
     settings: OidcUserManagerSettings(
       scope: const ['openid', 'profile', 'email', 'offline_access'],
       redirectUri: Uri.parse('jp.co.sonrisa.fido2demo://callback'),
@@ -142,7 +139,7 @@ Future<void> main() async {
       userInfoSettings: const OidcUserInfoSettings(sendUserInfoRequest: true),
     ),
   );
-  await oidcManager.init();
+  await manager.init();
   // 通知ハンドラ登録 (フォアグラウンド + バックグラウンドから通知タップ)
   FirebaseMessaging.onMessage.listen(_handleCibaMessage);
   FirebaseMessaging.onMessageOpenedApp.listen(_handleCibaMessage);
@@ -165,35 +162,29 @@ Future<void> main() async {
   // FCM token rotation を自動追従。アプリが OIDC ログイン中なら新 token を
   // サーバの replaceFcmToken に反映し、stale token に CIBA が届かない問題を防ぐ。
   FirebaseMessaging.instance.onTokenRefresh.listen((newToken) async {
-    final accessToken = oidcManager.currentUser?.token.accessToken;
+    final accessToken = manager.currentUser?.token.accessToken;
     if (accessToken == null) return;
-    await _postFcmToken(accessToken, newToken).catchError((_) {});
-  });
-
-  runApp(
-    ProviderScope(
-      overrides: [
-        oidcManagerProvider.overrideWithValue(oidcManager),
-        dpopClientProvider.overrideWithValue(_dpopClient),
-      ],
-      child: const MyApp(),
-    ),
-  );
-}
-
-/// FCM token をサーバに POST するヘルパー (UserView の _registerFcmToken と onTokenRefresh の両方から呼ぶ)。
-/// _dpopClient 経由なので Bearer は自動で DPoP に変換され proof が付与される。
-Future<void> _postFcmToken(String accessToken, String fcmToken) async {
-  await _dpopClient
-      .post(
+    try {
+      await dpopClient.post(
         Uri.parse('$opBase/oidc/me/fcm-tokens'),
         headers: {
           'Authorization': 'Bearer $accessToken',
           'Content-Type': 'application/json',
         },
-        body: jsonEncode({'token': fcmToken, 'platform': 'ios'}),
-      )
-      .timeout(const Duration(seconds: 30));
+        body: jsonEncode({'token': newToken, 'platform': 'ios'}),
+      ).timeout(const Duration(seconds: 30));
+    } catch (_) {}
+  });
+
+  runApp(
+    ProviderScope(
+      overrides: [
+        oidcManagerProvider.overrideWithValue(manager),
+        dpopClientProvider.overrideWithValue(dpopClient),
+      ],
+      child: const MyApp(),
+    ),
+  );
 }
 
 class MyApp extends StatelessWidget {
@@ -263,14 +254,14 @@ class HomePage extends ConsumerWidget {
   }
 }
 
-class ApprovalDialog extends StatefulWidget {
+class ApprovalDialog extends ConsumerStatefulWidget {
   const ApprovalDialog({super.key, required this.pending});
   final PendingApproval pending;
   @override
-  State<ApprovalDialog> createState() => _ApprovalDialogState();
+  ConsumerState<ApprovalDialog> createState() => _ApprovalDialogState();
 }
 
-class _ApprovalDialogState extends State<ApprovalDialog> {
+class _ApprovalDialogState extends ConsumerState<ApprovalDialog> {
   bool _busy = false;
   String? _error;
 
@@ -280,10 +271,10 @@ class _ApprovalDialogState extends State<ApprovalDialog> {
       _error = null;
     });
     try {
-      final accessToken = oidcManager.currentUser?.token.accessToken;
-      // _dpopClient が Bearer を DPoP に変換し proof を付与する。承認主体は
+      final accessToken = ref.read(oidcManagerProvider).currentUser?.token.accessToken;
+      // DPoP クライアントが Bearer を DPoP に変換し proof を付与する。承認主体は
       // access token から特定される（サーバ側 ciba_actor、cookie 不要）。
-      final res = await _dpopClient.post(
+      final res = await ref.read(dpopClientProvider).post(
         Uri.parse('$opBase/oidc/ciba/${widget.pending.authReqId}/reject'),
         headers: {'Authorization': 'Bearer $accessToken'},
       );
@@ -311,9 +302,9 @@ class _ApprovalDialogState extends State<ApprovalDialog> {
       _error = null;
     });
     try {
-      final accessToken = oidcManager.currentUser?.token.accessToken;
+      final accessToken = ref.read(oidcManagerProvider).currentUser?.token.accessToken;
       // 1. OP から Passkey options を取得 (access token + DPoP, allowCredentials を含む)
-      final optsRes = await _dpopClient.post(
+      final optsRes = await ref.read(dpopClientProvider).post(
         Uri.parse('$opBase/oidc/ciba/${widget.pending.authReqId}/passkey-options'),
         headers: {'Authorization': 'Bearer $accessToken', 'Content-Type': 'application/json'},
         body: '{}',
@@ -326,7 +317,7 @@ class _ApprovalDialogState extends State<ApprovalDialog> {
       final resp = await PasskeyAuthenticator().authenticate(req);
       // 3. assertion を OP に送って承認完了。Rust は {id, response:{...}} を受け 200 を返す。
       final respMap = jsonDecode(resp.toJsonString()) as Map<String, dynamic>;
-      final apprRes = await _dpopClient.post(
+      final apprRes = await ref.read(dpopClientProvider).post(
         Uri.parse('$opBase/oidc/ciba/${widget.pending.authReqId}/approve'),
         headers: {'Authorization': 'Bearer $accessToken', 'Content-Type': 'application/json'},
         body: jsonEncode({'id': respMap['id'], 'response': respMap['response']}),
@@ -424,14 +415,14 @@ class _ApprovalDialogState extends State<ApprovalDialog> {
   }
 }
 
-class LoginView extends StatefulWidget {
+class LoginView extends ConsumerStatefulWidget {
   const LoginView({super.key});
 
   @override
-  State<LoginView> createState() => _LoginViewState();
+  ConsumerState<LoginView> createState() => _LoginViewState();
 }
 
-class _LoginViewState extends State<LoginView> {
+class _LoginViewState extends ConsumerState<LoginView> {
   bool _busy = false;
 
   Future<void> _login() async {
@@ -441,7 +432,7 @@ class _LoginViewState extends State<LoginView> {
       // oidc-provider 9 は select_account を未サポートのため login を使う。
       // 結果として Conditional UI が走り、複数 Passkey 登録時は iOS の
       // 選択 sheet で候補から選べるようになる。
-      await oidcManager.loginAuthorizationCodeFlow(
+      await ref.read(oidcManagerProvider).loginAuthorizationCodeFlow(
         options: _loginOptions,
         promptOverride: const ['login'],
       );
@@ -497,13 +488,13 @@ class _LoginViewState extends State<LoginView> {
 }
 
 /// 新規登録: メアド入力 → /api/register/email-challenge を呼んで Magic Link 送信
-class RegisterEmailDialog extends StatefulWidget {
+class RegisterEmailDialog extends ConsumerStatefulWidget {
   const RegisterEmailDialog({super.key});
   @override
-  State<RegisterEmailDialog> createState() => _RegisterEmailDialogState();
+  ConsumerState<RegisterEmailDialog> createState() => _RegisterEmailDialogState();
 }
 
-class _RegisterEmailDialogState extends State<RegisterEmailDialog> {
+class _RegisterEmailDialogState extends ConsumerState<RegisterEmailDialog> {
   final _controller = TextEditingController();
   bool _busy = false;
   String? _error;
@@ -633,14 +624,14 @@ class _RegisterEmailDialogState extends State<RegisterEmailDialog> {
 }
 
 /// Magic Link tap で起動 → token を verify → email 取得 → Passkey 登録 → OIDC ログイン
-class MagicLinkDialog extends StatefulWidget {
+class MagicLinkDialog extends ConsumerStatefulWidget {
   const MagicLinkDialog({super.key, required this.token});
   final String token;
   @override
-  State<MagicLinkDialog> createState() => _MagicLinkDialogState();
+  ConsumerState<MagicLinkDialog> createState() => _MagicLinkDialogState();
 }
 
-class _MagicLinkDialogState extends State<MagicLinkDialog> {
+class _MagicLinkDialogState extends ConsumerState<MagicLinkDialog> {
   bool _busy = false;
   String? _email;
   String? _verifiedToken;
@@ -739,7 +730,7 @@ class _MagicLinkDialogState extends State<MagicLinkDialog> {
       if (!mounted) return;
       setState(() => _status = '登録完了。サインインします…');
       Navigator.of(context).pop();
-      await oidcManager.loginAuthorizationCodeFlow(
+      await ref.read(oidcManagerProvider).loginAuthorizationCodeFlow(
         options: _loginOptions,
         promptOverride: const ['login'],
       );
@@ -801,14 +792,14 @@ class _MagicLinkDialogState extends State<MagicLinkDialog> {
   }
 }
 
-class UserView extends StatefulWidget {
+class UserView extends ConsumerStatefulWidget {
   const UserView({super.key, required this.user});
   final OidcUser user;
   @override
-  State<UserView> createState() => _UserViewState();
+  ConsumerState<UserView> createState() => _UserViewState();
 }
 
-class _UserViewState extends State<UserView> {
+class _UserViewState extends ConsumerState<UserView> {
   final _name = TextEditingController();
   final _nickname = TextEditingController();
   final _birthdate = TextEditingController();
@@ -845,7 +836,7 @@ class _UserViewState extends State<UserView> {
       final fcmToken = await FirebaseMessaging.instance.getToken();
       final accessToken = widget.user.token.accessToken;
       if (fcmToken == null || accessToken == null) return;
-      await _dpopClient.post(
+      await ref.read(dpopClientProvider).post(
         Uri.parse('$opBase/oidc/me/fcm-tokens'),
         headers: {
           'Authorization': 'Bearer $accessToken',
@@ -862,7 +853,7 @@ class _UserViewState extends State<UserView> {
     try {
       final accessToken = widget.user.token.accessToken;
       if (accessToken != null) {
-        final res = await _dpopClient.get(
+        final res = await ref.read(dpopClientProvider).get(
           Uri.parse('$opBase/oidc/profile'),
           headers: {'Authorization': 'Bearer $accessToken'},
         );
@@ -893,7 +884,7 @@ class _UserViewState extends State<UserView> {
       if (accessToken == null) {
         throw Exception('セッションが切れました。ログインし直してください。');
       }
-      final res = await _dpopClient.put(
+      final res = await ref.read(dpopClientProvider).put(
         Uri.parse('$opBase/oidc/profile'),
         headers: {
           'Authorization': 'Bearer $accessToken',
@@ -1021,7 +1012,7 @@ class _UserViewState extends State<UserView> {
             // ブラウザを開く RP-initiated ログアウトではなくローカルでトークンを破棄する。
             // ログインは毎回 prompt=login を強制するため、OP セッションが残っても
             // 勝手な自動ログインは起きない (= ブラウザの点滅を無くせる)。
-            onPressed: () => oidcManager.forgetUser(),
+            onPressed: () => ref.read(oidcManagerProvider).forgetUser(),
             icon: const Icon(Icons.logout),
             label: const Text('ログアウト'),
           ),
