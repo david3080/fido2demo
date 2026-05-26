@@ -23,12 +23,9 @@ class _ApprovalDialogState extends ConsumerState<ApprovalDialog> {
       _error = null;
     });
     try {
-      final accessToken = ref.read(oidcManagerProvider).currentUser?.token.accessToken;
-      // DPoP クライアントが Bearer を DPoP に変換し proof を付与する。承認主体は
-      // access token から特定される（サーバ側 ciba_actor、cookie 不要）。
-      final res = await ref.read(dpopClientProvider).post(
+      // 拒否はログイン不要の公開操作（auth_req_id を知る当事者の fail-safe）。
+      final res = await ref.read(httpClientProvider).post(
         Uri.parse('$opBase/oidc/ciba/${widget.pending.authReqId}/reject'),
-        headers: {'Authorization': 'Bearer $accessToken'},
       );
       if (res.statusCode != 204) {
         throw Exception('reject ${res.statusCode}: ${res.body}');
@@ -54,24 +51,24 @@ class _ApprovalDialogState extends ConsumerState<ApprovalDialog> {
       _error = null;
     });
     try {
-      final accessToken = ref.read(oidcManagerProvider).currentUser?.token.accessToken;
-      // 1. OP から Passkey options を取得 (access token + DPoP, allowCredentials を含む)
-      final optsRes = await ref.read(dpopClientProvider).post(
+      final client = ref.read(httpClientProvider);
+      // 1. OP から Passkey options を取得（ログイン不要・auth_req_id の account に束縛）。
+      final optsRes = await client.post(
         Uri.parse('$opBase/oidc/ciba/${widget.pending.authReqId}/passkey-options'),
-        headers: {'Authorization': 'Bearer $accessToken', 'Content-Type': 'application/json'},
+        headers: {'Content-Type': 'application/json'},
         body: '{}',
       );
       if (optsRes.statusCode != 200) {
         throw Exception('options ${optsRes.statusCode}: ${optsRes.body}');
       }
-      // 2. passkeys パッケージで iOS のネイティブ Passkey 認証 (Face ID)
+      // 2. passkeys パッケージで iOS のネイティブ Passkey 認証 (Face ID, UV 必須)
       final req = AuthenticateRequestType.fromJsonString(optsRes.body);
       final resp = await PasskeyAuthenticator().authenticate(req);
       // 3. assertion を OP に送って承認完了。Rust は {id, response:{...}} を受け 200 を返す。
       final respMap = jsonDecode(resp.toJsonString()) as Map<String, dynamic>;
-      final apprRes = await ref.read(dpopClientProvider).post(
+      final apprRes = await client.post(
         Uri.parse('$opBase/oidc/ciba/${widget.pending.authReqId}/approve'),
-        headers: {'Authorization': 'Bearer $accessToken', 'Content-Type': 'application/json'},
+        headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'id': respMap['id'], 'response': respMap['response']}),
       );
       if (apprRes.statusCode != 200) {

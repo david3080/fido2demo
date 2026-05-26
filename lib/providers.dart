@@ -1,6 +1,7 @@
 import 'package:dart_dpop/dart_dpop.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
 import 'package:oidc/oidc.dart';
 
 import 'ciba_request.dart';
@@ -15,6 +16,15 @@ final oidcManagerProvider = Provider<OidcUserManager>(
 final dpopClientProvider = Provider<DpopHttpClient>(
   (ref) => throw UnimplementedError('override in main()'),
 );
+
+/// CIBA 承認/拒否はパスキー assertion 自体が本人性を証明するため、アプリへの
+/// ログイン（access token）を要しない公開エンドポイント。ログアウト/コールド起動
+/// でも動くよう、token に依存しない素の HTTP クライアントで呼ぶ。
+final httpClientProvider = Provider<http.Client>((ref) {
+  final c = http.Client();
+  ref.onDispose(c.close);
+  return c;
+});
 
 /// 認証ユーザー。currentUser を seed してから userChanges() を流す
 /// （旧 StreamBuilder の initialData 相当）。

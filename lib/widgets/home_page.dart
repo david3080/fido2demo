@@ -24,30 +24,53 @@ class MyApp extends StatelessWidget {
 
 /// UI = f(状態)。認証ユーザー / CIBA 承認 / Magic Link を Riverpod から watch/listen し、
 /// 画面とダイアログを宣言的に決める。
-class HomePage extends ConsumerWidget {
+class HomePage extends ConsumerStatefulWidget {
   const HomePage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    // CIBA 承認要求 (null→値) でダイアログを出し、閉じたらシンクを空に戻す。
-    ref.listen<PendingApproval?>(pendingApprovalProvider, (prev, next) {
-      if (next != null && prev == null) {
-        showDialog<void>(
-          context: context,
-          barrierDismissible: false,
-          builder: (_) => ApprovalDialog(pending: next),
-        ).whenComplete(() => ref.read(pendingApprovalProvider.notifier).reset());
-      }
+  ConsumerState<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends ConsumerState<HomePage> {
+  @override
+  void initState() {
+    super.initState();
+    // コールド起動 (getInitialMessage/getInitialLink) の値は runApp 前に sink へ
+    // 入るため provider の初期 state に既に乗っており、ref.listen は「変化」が無く
+    // 発火しない。初期 state を一度だけ拾ってダイアログを出す。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final pending = ref.read(pendingApprovalProvider);
+      if (pending != null) _showApproval(pending);
+      final token = ref.read(magicLinkTokenProvider);
+      if (token != null) _showMagicLink(token);
     });
-    // Magic Link で起動 (null→値) で Passkey 登録ダイアログ。
+  }
+
+  void _showApproval(PendingApproval pending) {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => ApprovalDialog(pending: pending),
+    ).whenComplete(() => ref.read(pendingApprovalProvider.notifier).reset());
+  }
+
+  void _showMagicLink(String token) {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => MagicLinkDialog(token: token),
+    ).whenComplete(() => ref.read(magicLinkTokenProvider.notifier).reset());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // 起動後の CIBA 承認要求 (null→値) でダイアログを出し、閉じたらシンクを空に戻す。
+    ref.listen<PendingApproval?>(pendingApprovalProvider, (prev, next) {
+      if (next != null && prev == null) _showApproval(next);
+    });
+    // Magic Link で復帰 (null→値) で Passkey 登録ダイアログ。
     ref.listen<String?>(magicLinkTokenProvider, (prev, next) {
-      if (next != null && prev == null) {
-        showDialog<void>(
-          context: context,
-          barrierDismissible: false,
-          builder: (_) => MagicLinkDialog(token: next),
-        ).whenComplete(() => ref.read(magicLinkTokenProvider.notifier).reset());
-      }
+      if (next != null && prev == null) _showMagicLink(next);
     });
     // ログアウトしたらカーソル案内を消す。
     ref.listen<AsyncValue<OidcUser?>>(authUserProvider, (prev, next) {
