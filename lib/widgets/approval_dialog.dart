@@ -1,8 +1,5 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:passkeys/authenticator.dart';
-import 'package:passkeys/types.dart';
 import '../ciba_request.dart';
 import '../providers.dart';
 
@@ -23,13 +20,7 @@ class _ApprovalDialogState extends ConsumerState<ApprovalDialog> {
       _error = null;
     });
     try {
-      // 拒否はログイン不要の公開操作（auth_req_id を知る当事者の fail-safe）。
-      final res = await ref.read(httpClientProvider).post(
-        Uri.parse('$opBase/oidc/ciba/${widget.pending.authReqId}/reject'),
-      );
-      if (res.statusCode != 204) {
-        throw Exception('reject ${res.statusCode}: ${res.body}');
-      }
+      await ref.read(cibaApprovalServiceProvider).reject(widget.pending);
       if (!mounted) return;
       Navigator.of(context).pop();
       ScaffoldMessenger.of(context).showSnackBar(
@@ -51,29 +42,7 @@ class _ApprovalDialogState extends ConsumerState<ApprovalDialog> {
       _error = null;
     });
     try {
-      final client = ref.read(httpClientProvider);
-      // 1. OP から Passkey options を取得（ログイン不要・auth_req_id の account に束縛）。
-      final optsRes = await client.post(
-        Uri.parse('$opBase/oidc/ciba/${widget.pending.authReqId}/passkey-options'),
-        headers: {'Content-Type': 'application/json'},
-        body: '{}',
-      );
-      if (optsRes.statusCode != 200) {
-        throw Exception('options ${optsRes.statusCode}: ${optsRes.body}');
-      }
-      // 2. passkeys パッケージで iOS のネイティブ Passkey 認証 (Face ID, UV 必須)
-      final req = AuthenticateRequestType.fromJsonString(optsRes.body);
-      final resp = await PasskeyAuthenticator().authenticate(req);
-      // 3. assertion を OP に送って承認完了。Rust は {id, response:{...}} を受け 200 を返す。
-      final respMap = jsonDecode(resp.toJsonString()) as Map<String, dynamic>;
-      final apprRes = await client.post(
-        Uri.parse('$opBase/oidc/ciba/${widget.pending.authReqId}/approve'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'id': respMap['id'], 'response': respMap['response']}),
-      );
-      if (apprRes.statusCode != 200) {
-        throw Exception('approve ${apprRes.statusCode}: ${apprRes.body}');
-      }
+      await ref.read(cibaApprovalServiceProvider).approve(widget.pending);
       if (!mounted) return;
       Navigator.of(context).pop();
       ScaffoldMessenger.of(context).showSnackBar(

@@ -4,7 +4,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:oidc/oidc.dart';
 
+import 'ciba_approval.dart';
 import 'ciba_request.dart';
+import 'profile_service.dart';
+import 'registration_service.dart';
 import 'remote_cursor.dart';
 
 const opBase = 'https://oidc.sonrisa.co.jp';
@@ -24,6 +27,28 @@ final httpClientProvider = Provider<http.Client>((ref) {
   final c = http.Client();
   ref.onDispose(c.close);
   return c;
+});
+
+/// パスキー認証ポート（テストで差し替えるため Provider 経由で注入）。
+final passkeyPortProvider = Provider<PasskeyPort>((ref) => const NativePasskey());
+
+/// CIBA 承認/拒否サービス。公開エンドポイントなので素の httpClient を使う。
+final cibaApprovalServiceProvider = Provider<CibaApprovalService>((ref) {
+  return CibaApprovalService(
+    client: ref.watch(httpClientProvider),
+    passkey: ref.watch(passkeyPortProvider),
+    opBase: opBase,
+  );
+});
+
+/// プロフィール取得/保存・FCM token 登録。DPoP 付きクライアントを使う。
+final profileServiceProvider = Provider<ProfileService>((ref) {
+  return ProfileService(client: ref.watch(dpopClientProvider), opBase: opBase);
+});
+
+/// 新規登録メール送信。token 不要なので素の httpClient を使う。
+final registrationServiceProvider = Provider<RegistrationService>((ref) {
+  return RegistrationService(client: ref.watch(httpClientProvider), opBase: opBase);
 });
 
 /// 認証ユーザー。currentUser を seed してから userChanges() を流す

@@ -1,0 +1,69 @@
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:passkeys/authenticator.dart';
+import 'package:passkeys/types.dart';
+import 'ciba_request.dart';
+
+/// パスキー認証のポート。本番は iOS ネイティブ、テストはフェイクに差し替える。
+/// options(JSON文字列) を受け、{id, response:{...}} 形式の assertion を返す。
+abstract class PasskeyPort {
+  Future<Map<String, dynamic>> authenticate(String optionsJson);
+}
+
+class NativePasskey implements PasskeyPort {
+  const NativePasskey();
+  @override
+  Future<Map<String, dynamic>> authenticate(String optionsJson) async {
+    final req = AuthenticateRequestType.fromJsonString(optionsJson);
+    final resp = await PasskeyAuthenticator().authenticate(req);
+    return jsonDecode(resp.toJsonString()) as Map<String, dynamic>;
+  }
+}
+
+class CibaApprovalException implements Exception {
+  CibaApprovalException(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
+
+/// CIBA 承認/拒否のオーケストレーション。承認はパスキー assertion 自体が本人性を
+/// 証明するためログイン(access token)不要。エンドポイントは公開なので素の HTTP で呼ぶ。
+class CibaApprovalService {
+  CibaApprovalService({required this.client, required this.passkey, required this.opBase});
+  final http.Client client;
+  final PasskeyPort passkey;
+  final String opBase;
+
+  Uri _u(String authReqId, String action) =>
+      Uri.parse('$opBase/oidc/ciba/$authReqId/$action');
+
+  /// 承認: options 取得 → パスキー認証(UV 必須) → assertion を approve に送る。
+  Future<void> approve(PendingApproval pending) async {
+    final optsRes = await client.post(
+      _u(pending.authReqId, 'passkey-options'),
+      headers: {'Content-Type': 'application/json'},
+      body: '{}',
+    );
+    if (optsRes.statusCode != 200) {
+      throw CibaApprovalException('options ${optsRes.statusCode}: ${optsRes.body}');
+    }
+    final assertion = await passkey.authenticate(optsRes.body);
+    final apprRes = await client.post(
+      _u(pending.authReqId, 'approve'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'id': assertion['id'], 'response': assertion['response']}),
+    );
+    if (apprRes.statusCode != 200) {
+      throw CibaApprovalException('approve ${apprRes.statusCode}: ${apprRes.body}');
+    }
+  }
+
+  /// 拒否: ログイン不要の fail-safe 操作。冪等(204)。
+  Future<void> reject(PendingApproval pending) async {
+    final res = await client.post(_u(pending.authReqId, 'reject'));
+    if (res.statusCode != 204) {
+      throw CibaApprovalException('reject ${res.statusCode}: ${res.body}');
+    }
+  }
+}

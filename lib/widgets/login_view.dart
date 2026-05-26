@@ -1,11 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:http/http.dart' as http;
 import '../error_messages.dart';
 import '../providers.dart';
+import '../registration_service.dart';
 import '../ui_shared.dart';
 import '../validators.dart';
-import 'dart:convert';
 
 class LoginView extends ConsumerStatefulWidget {
   const LoginView({super.key});
@@ -29,8 +28,7 @@ class _LoginViewState extends ConsumerState<LoginView> {
         promptOverride: const ['login'],
       );
     } catch (e) {
-      final cancelled = e.toString().contains('FlutterAppAuthUserCancelledException');
-      if (cancelled || !mounted) return;
+      if (isUserCancelledLogin(e) || !mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('ログインに失敗しました。もう一度お試しください。')),
       );
@@ -111,22 +109,7 @@ class _RegisterEmailDialogState extends ConsumerState<RegisterEmailDialog> {
       _error = null;
     });
     try {
-      final res = await http
-          .post(
-            Uri.parse('$opBase/oidc/register/email-challenge'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'email': email}),
-          )
-          .timeout(const Duration(seconds: 30));
-      if (res.statusCode == 429) {
-        throw Exception('リクエストが多すぎます。しばらくしてから再試行してください。');
-      }
-      if (res.statusCode >= 500) {
-        throw Exception('サーバが一時的に利用できません。しばらくしてから再試行してください。');
-      }
-      if (res.statusCode != 204) {
-        throw Exception('予期しないエラー (HTTP ${res.statusCode})');
-      }
+      await ref.read(registrationServiceProvider).sendEmailChallenge(email);
       if (mounted) setState(() => _sent = true);
     } catch (e) {
       if (mounted) {

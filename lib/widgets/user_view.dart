@@ -1,9 +1,9 @@
-import 'dart:convert';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:oidc/oidc.dart';
 import '../error_messages.dart';
+import '../profile_service.dart';
 import '../providers.dart';
 import '../ui_shared.dart';
 
@@ -51,14 +51,7 @@ class _UserViewState extends ConsumerState<UserView> {
       final fcmToken = await FirebaseMessaging.instance.getToken();
       final accessToken = widget.user.token.accessToken;
       if (fcmToken == null || accessToken == null) return;
-      await ref.read(dpopClientProvider).post(
-        Uri.parse('$opBase/oidc/me/fcm-tokens'),
-        headers: {
-          'Authorization': 'Bearer $accessToken',
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({'token': fcmToken, 'platform': 'ios'}),
-      );
+      await ref.read(profileServiceProvider).registerFcmToken(accessToken, fcmToken);
     } catch (_) {
       // 失敗してもプロフィール画面は使えるので黙って無視。
     }
@@ -68,18 +61,12 @@ class _UserViewState extends ConsumerState<UserView> {
     try {
       final accessToken = widget.user.token.accessToken;
       if (accessToken != null) {
-        final res = await ref.read(dpopClientProvider).get(
-          Uri.parse('$opBase/oidc/profile'),
-          headers: {'Authorization': 'Bearer $accessToken'},
-        );
-        if (res.statusCode == 200) {
-          // レスポンスは {sub, editable_fields, profile:{...}} 形式。
-          final m = jsonDecode(res.body) as Map<String, dynamic>;
-          final p = (m['profile'] as Map?) ?? const {};
-          _name.text = (p['name'] as String?) ?? '';
-          _nickname.text = (p['nickname'] as String?) ?? '';
-          _birthdate.text = (p['birthdate'] as String?) ?? '';
-          _gender = (p['gender'] as String?) ?? '';
+        final p = await ref.read(profileServiceProvider).load(accessToken);
+        if (p != null) {
+          _name.text = p.name;
+          _nickname.text = p.nickname;
+          _birthdate.text = p.birthdate;
+          _gender = p.gender;
         }
       }
     } catch (_) {
@@ -99,22 +86,15 @@ class _UserViewState extends ConsumerState<UserView> {
       if (accessToken == null) {
         throw Exception('セッションが切れました。ログインし直してください。');
       }
-      final res = await ref.read(dpopClientProvider).put(
-        Uri.parse('$opBase/oidc/profile'),
-        headers: {
-          'Authorization': 'Bearer $accessToken',
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({
-          'name': _name.text.trim(),
-          'nickname': _nickname.text.trim(),
-          'gender': _gender,
-          'birthdate': _birthdate.text.trim(),
-        }),
-      );
-      if (res.statusCode != 200) {
-        throw Exception('保存に失敗しました (HTTP ${res.statusCode})');
-      }
+      await ref.read(profileServiceProvider).save(
+            accessToken,
+            ProfileData(
+              name: _name.text,
+              nickname: _nickname.text,
+              gender: _gender,
+              birthdate: _birthdate.text,
+            ),
+          );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('プロフィールを保存しました')),
