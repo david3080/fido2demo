@@ -60,6 +60,8 @@ final authUserProvider = StreamProvider<OidcUser?>((ref) async* {
 });
 
 // main() の FCM/Universal Link ハンドラが書き込む「保持付きシンク」。
+// 注意(テスト): これらはモジュール global なので、widget テストで値を入れたら
+// addTearDown で null に戻すこと（次のテストへ漏れる）。
 // ValueNotifier なのでコールド起動 (getInitialMessage/Link) の値も保持され、
 // Provider が後から購読しても取りこぼさない。別 isolate の ProviderContainer
 // 共有を避けつつ宣言的 UI に供給するためのブリッジ。

@@ -47,8 +47,10 @@ void main() {
       ],
       child: const MyApp(),
     ));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 50));
+    // post-frame callback → showDialog → ダイアログ遷移。CI でも安定するよう複数回 pump。
+    for (var i = 0; i < 5; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
     // ログイン画面の上に承認ダイアログが出る。
     expect(find.text('ログイン承認'), findsOneWidget);
     expect(find.text('msg'), findsOneWidget);
