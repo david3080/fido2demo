@@ -12,13 +12,18 @@ import 'package:oidc_default_store/oidc_default_store.dart';
 import 'package:passkeys/authenticator.dart';
 import 'package:passkeys/types.dart';
 
+import 'ciba_request.dart';
+import 'error_messages.dart';
 import 'firebase_options.dart';
+import 'magic_link.dart';
+import 'remote_cursor.dart';
+import 'validators.dart';
 
 const _opBase = 'https://oidc.sonrisa.co.jp';
 
 // DPoP 用 ES256 鍵とそれを使う HTTP クライアント。
-// アプリ起動ごとに鍵を新規生成するため、再起動で進行中の access_token は無効化される
-// (= refresh も含めて再ログインが必要)。永続化は flutter_secure_storage で将来対応。
+// 鍵は flutter_secure_storage に永続化し（_loadOrCreateDpopKey）、再起動/FCM
+// コールド起動後も同じ鍵 = 既存 access_token (cnf.jkt) を有効に保つ。
 late final DpopProofGenerator _dpopGen;
 late final DpopHttpClient _dpopClient;
 late final OidcUserManager oidcManager;
@@ -35,67 +40,20 @@ const _loginOptions = OidcPlatformSpecificOptions(
   ),
 );
 
-// メアド簡易形式チェック (RFC 完全準拠ではなく実用範囲)。
-final RegExp _emailRegex = RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$');
-bool _isValidEmail(String s) => s.length <= 254 && _emailRegex.hasMatch(s);
-
-/// HTTP / ネットワーク例外を人間向けメッセージに変換する。
-String _humanizeError(Object e) {
-  final msg = e.toString();
-  if (msg.contains('TimeoutException')) return 'タイムアウトしました。インターネット接続を確認してください。';
-  if (msg.contains('SocketException') || msg.contains('Failed host lookup')) return 'ネットワークに接続できません。';
-  if (msg.contains('cancel') || msg.contains('Cancel')) return 'キャンセルされました。';
-  return msg.replaceFirst('Exception: ', '');
-}
-
 /// Magic Link (Universal Link で受信) の token を保持する。
 /// HomePage がこれを監視して登録 dialog を表示する。
 final ValueNotifier<String?> _magicLinkToken = ValueNotifier(null);
 
 void _handleUniversalLink(Uri? uri) {
-  if (uri == null) return;
-  if (uri.host != 'oidc.sonrisa.co.jp') return;
-  if (uri.path != '/r') return;
-  final t = uri.queryParameters['t'];
-  if (t == null || t.isEmpty) return;
-  _magicLinkToken.value = t;
-}
-
-/// CIBA: Mac (Consumption Device) からの保留中認証要求。FCM 通知から復元する。
-class PendingApproval {
-  PendingApproval({
-    required this.authReqId,
-    required this.clientName,
-    required this.scope,
-    required this.bindingMessage,
-  });
-  final String authReqId;
-  final String clientName;
-  final String scope;
-  final String bindingMessage;
+  final t = parseMagicLinkToken(uri);
+  if (t != null) _magicLinkToken.value = t;
 }
 
 final ValueNotifier<PendingApproval?> _pending = ValueNotifier(null);
 
 void _handleCibaMessage(RemoteMessage m) {
-  if (m.data['type'] != 'ciba_request') return;
-  final authReqId = m.data['auth_req_id'] as String?;
-  if (authReqId == null) return;
-  _pending.value = PendingApproval(
-    authReqId: authReqId,
-    clientName: (m.data['client_name'] as String?) ?? '?',
-    scope: (m.data['scope'] as String?) ?? '',
-    bindingMessage: (m.data['binding_message'] as String?) ?? '',
-  );
-}
-
-/// リモート支援デモ: CIBA 承認済みのオペレータ (Claude Code) から
-/// `type:'remote_cursor'` の data 通知を受けて、対象 widget にカーソル/ハイライトを出す。
-/// target はサーバ側 CURSOR_TARGETS と同じキー。
-class CursorCommand {
-  CursorCommand({required this.target, required this.label});
-  final String target;
-  final String label;
+  final p = PendingApproval.fromFcmData(m.data);
+  if (p != null) _pending.value = p;
 }
 
 final ValueNotifier<CursorCommand?> _cursorCommand = ValueNotifier(null);
@@ -111,18 +69,14 @@ final Map<String, GlobalKey> _cursorTargetKeys = {
 };
 
 void _handleRemoteCursorMessage(RemoteMessage m) {
-  if (m.data['type'] != 'remote_cursor') return;
-  final target = m.data['target'] as String?;
-  // target='none' は案内の解除 (clear_highlight)。表示中のカーソルを消す。
-  if (target == 'none') {
-    _cursorCommand.value = null;
-    return;
+  switch (parseRemoteCursorEvent(m.data, _cursorTargetKeys.keys.toSet())) {
+    case CursorClear():
+      _cursorCommand.value = null;
+    case CursorShow(:final command):
+      _cursorCommand.value = command;
+    case CursorIgnore():
+      break;
   }
-  if (target == null || !_cursorTargetKeys.containsKey(target)) return;
-  _cursorCommand.value = CursorCommand(
-    target: target,
-    label: (m.data['label'] as String?) ?? '',
-  );
 }
 
 const _secureStore = FlutterSecureStorage();
@@ -591,7 +545,7 @@ class _RegisterEmailDialogState extends State<RegisterEmailDialog> {
       setState(() => _error = 'メールアドレスが長すぎます (254 文字以内)');
       return;
     }
-    if (!_isValidEmail(email)) {
+    if (!isValidEmail(email)) {
       setState(() => _error = 'メールアドレスの形式が正しくありません (例: name@example.com)');
       return;
     }
@@ -620,7 +574,7 @@ class _RegisterEmailDialogState extends State<RegisterEmailDialog> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = _humanizeError(e);
+          _error = humanizeError(e);
           _busy = false;
         });
       }
@@ -762,7 +716,7 @@ class _MagicLinkDialogState extends State<MagicLinkDialog> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = _humanizeError(e);
+          _error = humanizeError(e);
           _busy = false;
         });
       }
@@ -818,7 +772,7 @@ class _MagicLinkDialogState extends State<MagicLinkDialog> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = _humanizeError(e);
+          _error = humanizeError(e);
           _busy = false;
           _status = 'エラーが発生しました';
         });
@@ -986,7 +940,7 @@ class _UserViewState extends State<UserView> {
         const SnackBar(content: Text('プロフィールを保存しました')),
       );
     } catch (e) {
-      if (mounted) setState(() => _error = _humanizeError(e));
+      if (mounted) setState(() => _error = humanizeError(e));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
