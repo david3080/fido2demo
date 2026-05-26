@@ -5,6 +5,7 @@ import 'package:dart_dpop/dart_dpop.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:oidc/oidc.dart';
 import 'package:oidc_default_store/oidc_default_store.dart';
@@ -124,6 +125,39 @@ void _handleRemoteCursorMessage(RemoteMessage m) {
   );
 }
 
+const _secureStore = FlutterSecureStorage();
+const _dpopKeyStorageId = 'dpop_es256_key_v1';
+
+/// DPoP 鍵を flutter_secure_storage に永続化して再利用する。保存済みがあれば
+/// d/x/y から復元、無ければ生成して保存。これにより再起動/FCM コールド起動後も
+/// 同じ鍵 = 既存 access_token が有効なまま（CIBA 承認等の 401 を防ぐ）。
+Future<Es256DpopKey> _loadOrCreateDpopKey() async {
+  final stored = await _secureStore.read(key: _dpopKeyStorageId);
+  if (stored != null) {
+    try {
+      final m = jsonDecode(stored) as Map<String, dynamic>;
+      return await Es256DpopKey.fromSeed(
+        d: base64Url.decode(m['d'] as String),
+        x: base64Url.decode(m['x'] as String),
+        y: base64Url.decode(m['y'] as String),
+      );
+    } catch (_) {
+      // 壊れていたら作り直す。
+    }
+  }
+  final key = await Es256DpopKey.generate();
+  final raw = (key as PointycastleEs256DpopKey).extractRaw();
+  await _secureStore.write(
+    key: _dpopKeyStorageId,
+    value: jsonEncode({
+      'd': base64Url.encode(raw['d']!),
+      'x': base64Url.encode(raw['x']!),
+      'y': base64Url.encode(raw['y']!),
+    }),
+  );
+  return key;
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
@@ -135,8 +169,10 @@ Future<void> main() async {
     debugPrint('FCM requestPermission failed (continuing): $e');
   }
 
-  // DPoP 初期化 (oidcManager より先に作る必要あり: httpClient として注入するため)
-  final dpopKey = await Es256DpopKey.generate();
+  // DPoP 初期化 (oidcManager より先に作る必要あり: httpClient として注入するため)。
+  // 鍵は flutter_secure_storage に永続化し、再起動/FCM 起動後も同じ鍵を使う。
+  // 起動ごとに鍵が変わると既存 access_token (cnf.jkt) が無効化され 401 になるのを防ぐ。
+  final dpopKey = await _loadOrCreateDpopKey();
   _dpopGen = DpopProofGenerator(key: dpopKey);
   _dpopClient = DpopHttpClient(generator: _dpopGen);
 
@@ -429,6 +465,12 @@ class _ApprovalDialogState extends State<ApprovalDialog> {
             SelectableText(
               _error!,
               style: const TextStyle(color: Colors.red, fontSize: 12),
+            ),
+            const SizedBox(height: 8),
+            // エラー時でもダイアログから抜けられるようにする（401 等で操作不能を防ぐ）。
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('閉じる'),
             ),
           ],
         ],
