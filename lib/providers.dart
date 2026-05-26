@@ -1,0 +1,62 @@
+import 'package:dart_dpop/dart_dpop.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:oidc/oidc.dart';
+
+import 'ciba_request.dart';
+import 'remote_cursor.dart';
+
+const opBase = 'https://oidc.sonrisa.co.jp';
+
+/// main() で初期化したインスタンスを override で注入する。
+final oidcManagerProvider = Provider<OidcUserManager>(
+  (ref) => throw UnimplementedError('override in main()'),
+);
+final dpopClientProvider = Provider<DpopHttpClient>(
+  (ref) => throw UnimplementedError('override in main()'),
+);
+
+/// 認証ユーザー。currentUser を seed してから userChanges() を流す
+/// （旧 StreamBuilder の initialData 相当）。
+final authUserProvider = StreamProvider<OidcUser?>((ref) async* {
+  final m = ref.watch(oidcManagerProvider);
+  yield m.currentUser;
+  yield* m.userChanges();
+});
+
+// main() の FCM/Universal Link ハンドラが書き込む「保持付きシンク」。
+// ValueNotifier なのでコールド起動 (getInitialMessage/Link) の値も保持され、
+// Provider が後から購読しても取りこぼさない。別 isolate の ProviderContainer
+// 共有を避けつつ宣言的 UI に供給するためのブリッジ。
+final ValueNotifier<PendingApproval?> pendingApprovalSink = ValueNotifier(null);
+final ValueNotifier<String?> magicLinkTokenSink = ValueNotifier(null);
+final ValueNotifier<CursorCommand?> cursorCommandSink = ValueNotifier(null);
+
+/// ValueNotifier シンクを Riverpod state にミラーする。reset() でシンクを空にする。
+class _MirrorNotifier<T> extends Notifier<T?> {
+  _MirrorNotifier(this._source);
+  final ValueNotifier<T?> _source;
+
+  @override
+  T? build() {
+    void update() => state = _source.value;
+    _source.addListener(update);
+    ref.onDispose(() => _source.removeListener(update));
+    return _source.value;
+  }
+
+  void reset() => _source.value = null;
+}
+
+final pendingApprovalProvider =
+    NotifierProvider<_MirrorNotifier<PendingApproval>, PendingApproval?>(
+  () => _MirrorNotifier(pendingApprovalSink),
+);
+final magicLinkTokenProvider =
+    NotifierProvider<_MirrorNotifier<String>, String?>(
+  () => _MirrorNotifier(magicLinkTokenSink),
+);
+final cursorCommandProvider =
+    NotifierProvider<_MirrorNotifier<CursorCommand>, CursorCommand?>(
+  () => _MirrorNotifier(cursorCommandSink),
+);

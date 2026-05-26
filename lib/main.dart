@@ -5,6 +5,7 @@ import 'package:dart_dpop/dart_dpop.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:oidc/oidc.dart';
@@ -16,14 +17,15 @@ import 'ciba_request.dart';
 import 'error_messages.dart';
 import 'firebase_options.dart';
 import 'magic_link.dart';
+import 'providers.dart';
 import 'remote_cursor.dart';
 import 'validators.dart';
-
-const _opBase = 'https://oidc.sonrisa.co.jp';
 
 // DPoP 用 ES256 鍵とそれを使う HTTP クライアント。
 // 鍵は flutter_secure_storage に永続化し（_loadOrCreateDpopKey）、再起動/FCM
 // コールド起動後も同じ鍵 = 既存 access_token (cnf.jkt) を有効に保つ。
+// oidcManager/_dpopClient は providers の oidcManagerProvider/dpopClientProvider
+// にも override で注入し、宣言的 UI 側は ref 経由で参照する。
 late final DpopProofGenerator _dpopGen;
 late final DpopHttpClient _dpopClient;
 late final OidcUserManager oidcManager;
@@ -40,23 +42,18 @@ const _loginOptions = OidcPlatformSpecificOptions(
   ),
 );
 
-/// Magic Link (Universal Link で受信) の token を保持する。
-/// HomePage がこれを監視して登録 dialog を表示する。
-final ValueNotifier<String?> _magicLinkToken = ValueNotifier(null);
+// FCM / Universal Link ハンドラは providers の保持付きシンク（ValueNotifier）へ
+// 書き込むだけ。Riverpod の Notifier がこれをミラーし宣言的 UI に供給する。
 
 void _handleUniversalLink(Uri? uri) {
   final t = parseMagicLinkToken(uri);
-  if (t != null) _magicLinkToken.value = t;
+  if (t != null) magicLinkTokenSink.value = t;
 }
-
-final ValueNotifier<PendingApproval?> _pending = ValueNotifier(null);
 
 void _handleCibaMessage(RemoteMessage m) {
   final p = PendingApproval.fromFcmData(m.data);
-  if (p != null) _pending.value = p;
+  if (p != null) pendingApprovalSink.value = p;
 }
-
-final ValueNotifier<CursorCommand?> _cursorCommand = ValueNotifier(null);
 
 /// 案内対象 widget に付ける GlobalKey。UserView 側でこのキーをカードやボタンに割り当てる。
 final Map<String, GlobalKey> _cursorTargetKeys = {
@@ -71,9 +68,9 @@ final Map<String, GlobalKey> _cursorTargetKeys = {
 void _handleRemoteCursorMessage(RemoteMessage m) {
   switch (parseRemoteCursorEvent(m.data, _cursorTargetKeys.keys.toSet())) {
     case CursorClear():
-      _cursorCommand.value = null;
+      cursorCommandSink.value = null;
     case CursorShow(:final command):
-      _cursorCommand.value = command;
+      cursorCommandSink.value = command;
     case CursorIgnore():
       break;
   }
@@ -132,7 +129,7 @@ Future<void> main() async {
 
   oidcManager = OidcUserManager.lazy(
     discoveryDocumentUri: OidcUtils.getOpenIdConfigWellKnownUri(
-      Uri.parse('$_opBase/oidc'),
+      Uri.parse('$opBase/oidc'),
     ),
     clientCredentials:
         const OidcClientAuthentication.none(clientId: 'mobile-rp'),
@@ -173,7 +170,15 @@ Future<void> main() async {
     await _postFcmToken(accessToken, newToken).catchError((_) {});
   });
 
-  runApp(const MyApp());
+  runApp(
+    ProviderScope(
+      overrides: [
+        oidcManagerProvider.overrideWithValue(oidcManager),
+        dpopClientProvider.overrideWithValue(_dpopClient),
+      ],
+      child: const MyApp(),
+    ),
+  );
 }
 
 /// FCM token をサーバに POST するヘルパー (UserView の _registerFcmToken と onTokenRefresh の両方から呼ぶ)。
@@ -181,7 +186,7 @@ Future<void> main() async {
 Future<void> _postFcmToken(String accessToken, String fcmToken) async {
   await _dpopClient
       .post(
-        Uri.parse('$_opBase/oidc/me/fcm-tokens'),
+        Uri.parse('$opBase/oidc/me/fcm-tokens'),
         headers: {
           'Authorization': 'Bearer $accessToken',
           'Content-Type': 'application/json',
@@ -204,89 +209,58 @@ class MyApp extends StatelessWidget {
   }
 }
 
-class HomePage extends StatelessWidget {
+/// UI = f(状態)。認証ユーザー / CIBA 承認 / Magic Link を Riverpod から watch/listen し、
+/// 画面とダイアログを宣言的に決める。
+class HomePage extends ConsumerWidget {
   const HomePage({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    // CIBA 承認要求 (null→値) でダイアログを出し、閉じたらシンクを空に戻す。
+    ref.listen<PendingApproval?>(pendingApprovalProvider, (prev, next) {
+      if (next != null && prev == null) {
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => ApprovalDialog(pending: next),
+        ).whenComplete(() => ref.read(pendingApprovalProvider.notifier).reset());
+      }
+    });
+    // Magic Link で起動 (null→値) で Passkey 登録ダイアログ。
+    ref.listen<String?>(magicLinkTokenProvider, (prev, next) {
+      if (next != null && prev == null) {
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => MagicLinkDialog(token: next),
+        ).whenComplete(() => ref.read(magicLinkTokenProvider.notifier).reset());
+      }
+    });
+    // ログアウトしたらカーソル案内を消す。
+    ref.listen<AsyncValue<OidcUser?>>(authUserProvider, (prev, next) {
+      if (next.asData?.value == null) {
+        ref.read(cursorCommandProvider.notifier).reset();
+      }
+    });
+
+    final authUser = ref.watch(authUserProvider);
     return Scaffold(
       body: SafeArea(
         child: Stack(
-        children: [
-          StreamBuilder<OidcUser?>(
-            stream: oidcManager.userChanges(),
-            initialData: oidcManager.currentUser,
-            builder: (context, snapshot) {
-              final user = snapshot.data;
-              if (user == null) {
-                // ログアウト時はカーソル案内を消す
-                if (_cursorCommand.value != null) {
-                  WidgetsBinding.instance.addPostFrameCallback(
-                    (_) => _cursorCommand.value = null,
-                  );
-                }
-                return const LoginView();
-              }
-              return UserView(user: user);
-            },
-          ),
-          // 保留中の CIBA 承認要求があれば dialog を表示する
-          ValueListenableBuilder<PendingApproval?>(
-            valueListenable: _pending,
-            builder: (context, pending, _) {
-              if (pending == null) return const SizedBox.shrink();
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                _showApprovalDialog(context, pending);
-              });
-              return const SizedBox.shrink();
-            },
-          ),
-          // Magic Link で起動した場合は Passkey 登録 dialog を表示する
-          ValueListenableBuilder<String?>(
-            valueListenable: _magicLinkToken,
-            builder: (context, token, _) {
-              if (token == null) return const SizedBox.shrink();
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                _showMagicLinkDialog(context, token);
-              });
-              return const SizedBox.shrink();
-            },
-          ),
-          // リモート支援: カーソル/ハイライトのオーバーレイ (タップは透過)
-          const Positioned.fill(child: IgnorePointer(child: CursorOverlay())),
-        ],
+          children: [
+            authUser.when(
+              data: (user) =>
+                  user == null ? const LoginView() : UserView(user: user),
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, _) => Center(child: Text('エラー: $e')),
+            ),
+            // リモート支援: カーソル/ハイライトのオーバーレイ (タップは透過)
+            const Positioned.fill(child: IgnorePointer(child: CursorOverlay())),
+          ],
         ),
       ),
     );
   }
-}
-
-bool _dialogOpen = false;
-void _showApprovalDialog(BuildContext context, PendingApproval pending) {
-  if (_dialogOpen) return;
-  _dialogOpen = true;
-  showDialog<void>(
-    context: context,
-    barrierDismissible: false,
-    builder: (ctx) => ApprovalDialog(pending: pending),
-  ).whenComplete(() {
-    _dialogOpen = false;
-    _pending.value = null;
-  });
-}
-
-bool _magicLinkDialogOpen = false;
-void _showMagicLinkDialog(BuildContext context, String token) {
-  if (_magicLinkDialogOpen) return;
-  _magicLinkDialogOpen = true;
-  showDialog<void>(
-    context: context,
-    barrierDismissible: false,
-    builder: (ctx) => MagicLinkDialog(token: token),
-  ).whenComplete(() {
-    _magicLinkDialogOpen = false;
-    _magicLinkToken.value = null;
-  });
 }
 
 class ApprovalDialog extends StatefulWidget {
@@ -310,7 +284,7 @@ class _ApprovalDialogState extends State<ApprovalDialog> {
       // _dpopClient が Bearer を DPoP に変換し proof を付与する。承認主体は
       // access token から特定される（サーバ側 ciba_actor、cookie 不要）。
       final res = await _dpopClient.post(
-        Uri.parse('$_opBase/oidc/ciba/${widget.pending.authReqId}/reject'),
+        Uri.parse('$opBase/oidc/ciba/${widget.pending.authReqId}/reject'),
         headers: {'Authorization': 'Bearer $accessToken'},
       );
       if (res.statusCode != 204) {
@@ -340,7 +314,7 @@ class _ApprovalDialogState extends State<ApprovalDialog> {
       final accessToken = oidcManager.currentUser?.token.accessToken;
       // 1. OP から Passkey options を取得 (access token + DPoP, allowCredentials を含む)
       final optsRes = await _dpopClient.post(
-        Uri.parse('$_opBase/oidc/ciba/${widget.pending.authReqId}/passkey-options'),
+        Uri.parse('$opBase/oidc/ciba/${widget.pending.authReqId}/passkey-options'),
         headers: {'Authorization': 'Bearer $accessToken', 'Content-Type': 'application/json'},
         body: '{}',
       );
@@ -353,7 +327,7 @@ class _ApprovalDialogState extends State<ApprovalDialog> {
       // 3. assertion を OP に送って承認完了。Rust は {id, response:{...}} を受け 200 を返す。
       final respMap = jsonDecode(resp.toJsonString()) as Map<String, dynamic>;
       final apprRes = await _dpopClient.post(
-        Uri.parse('$_opBase/oidc/ciba/${widget.pending.authReqId}/approve'),
+        Uri.parse('$opBase/oidc/ciba/${widget.pending.authReqId}/approve'),
         headers: {'Authorization': 'Bearer $accessToken', 'Content-Type': 'application/json'},
         body: jsonEncode({'id': respMap['id'], 'response': respMap['response']}),
       );
@@ -556,7 +530,7 @@ class _RegisterEmailDialogState extends State<RegisterEmailDialog> {
     try {
       final res = await http
           .post(
-            Uri.parse('$_opBase/oidc/register/email-challenge'),
+            Uri.parse('$opBase/oidc/register/email-challenge'),
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({'email': email}),
           )
@@ -687,7 +661,7 @@ class _MagicLinkDialogState extends State<MagicLinkDialog> {
     try {
       final res = await http
           .post(
-            Uri.parse('$_opBase/oidc/register/verify-email'),
+            Uri.parse('$opBase/oidc/register/verify-email'),
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({'token': widget.token}),
           )
@@ -733,7 +707,7 @@ class _MagicLinkDialogState extends State<MagicLinkDialog> {
     try {
       final optsRes = await http
           .post(
-            Uri.parse('$_opBase/oidc/register/passkey/options'),
+            Uri.parse('$opBase/oidc/register/passkey/options'),
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({'token': _verifiedToken}),
           )
@@ -751,7 +725,7 @@ class _MagicLinkDialogState extends State<MagicLinkDialog> {
       final respMap = jsonDecode(resp.toJsonString()) as Map<String, dynamic>;
       final verifyRes = await http
           .post(
-            Uri.parse('$_opBase/oidc/register/passkey/verify'),
+            Uri.parse('$opBase/oidc/register/passkey/verify'),
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({
               'token': _verifiedToken,
@@ -872,7 +846,7 @@ class _UserViewState extends State<UserView> {
       final accessToken = widget.user.token.accessToken;
       if (fcmToken == null || accessToken == null) return;
       await _dpopClient.post(
-        Uri.parse('$_opBase/oidc/me/fcm-tokens'),
+        Uri.parse('$opBase/oidc/me/fcm-tokens'),
         headers: {
           'Authorization': 'Bearer $accessToken',
           'Content-Type': 'application/json',
@@ -889,7 +863,7 @@ class _UserViewState extends State<UserView> {
       final accessToken = widget.user.token.accessToken;
       if (accessToken != null) {
         final res = await _dpopClient.get(
-          Uri.parse('$_opBase/oidc/profile'),
+          Uri.parse('$opBase/oidc/profile'),
           headers: {'Authorization': 'Bearer $accessToken'},
         );
         if (res.statusCode == 200) {
@@ -920,7 +894,7 @@ class _UserViewState extends State<UserView> {
         throw Exception('セッションが切れました。ログインし直してください。');
       }
       final res = await _dpopClient.put(
-        Uri.parse('$_opBase/oidc/profile'),
+        Uri.parse('$opBase/oidc/profile'),
         headers: {
           'Authorization': 'Bearer $accessToken',
           'Content-Type': 'application/json',
@@ -1088,15 +1062,15 @@ class _FieldCard extends StatelessWidget {
   }
 }
 
-/// リモート支援デモ: `_cursorCommand` を監視し、対象 widget (GlobalKey) の位置に
+/// リモート支援デモ: cursorCommandProvider を監視し、対象 widget (GlobalKey) の位置に
 /// ハイライト枠・ポインタ・説明ラベルを重ねて表示する。タップは透過 (IgnorePointer)。
-class CursorOverlay extends StatefulWidget {
+class CursorOverlay extends ConsumerStatefulWidget {
   const CursorOverlay({super.key});
   @override
-  State<CursorOverlay> createState() => _CursorOverlayState();
+  ConsumerState<CursorOverlay> createState() => _CursorOverlayState();
 }
 
-class _CursorOverlayState extends State<CursorOverlay>
+class _CursorOverlayState extends ConsumerState<CursorOverlay>
     with SingleTickerProviderStateMixin {
   String? _target;
   String _label = '';
@@ -1109,18 +1083,15 @@ class _CursorOverlayState extends State<CursorOverlay>
       vsync: this,
       duration: const Duration(milliseconds: 900),
     )..repeat(reverse: true);
-    _cursorCommand.addListener(_onCommand);
   }
 
   @override
   void dispose() {
-    _cursorCommand.removeListener(_onCommand);
     _pulse.dispose();
     super.dispose();
   }
 
-  void _onCommand() {
-    final cmd = _cursorCommand.value;
+  void _applyCommand(CursorCommand? cmd) {
     // null は案内の解除 (clear_highlight / target='none')。表示中の枠を消す。
     if (cmd == null) {
       setState(() {
@@ -1163,6 +1134,8 @@ class _CursorOverlayState extends State<CursorOverlay>
 
   @override
   Widget build(BuildContext context) {
+    // cursorCommandProvider の変化で表示/解除を適用する。
+    ref.listen<CursorCommand?>(cursorCommandProvider, (_, next) => _applyCommand(next));
     if (_target == null) return const SizedBox.shrink();
     final primary = Theme.of(context).colorScheme.primary;
     // _pulse を毎フレーム購読することで、スクロール中も位置を再計算する。
