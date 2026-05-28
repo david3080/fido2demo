@@ -128,7 +128,7 @@ class _RegisterEmailDialogState extends ConsumerState<RegisterEmailDialog> {
         title: const Text('メールを送信しました'),
         content: const Text(
           '受信箱でメール内の「アプリで開く」ボタンをタップしてください。\n'
-          '有効期限は 15 分です。',
+          '有効期限は 30 分です。',
         ),
         actions: [
           TextButton(
