@@ -38,5 +38,27 @@ void main() {
         isNull,
       );
     });
+
+    test('accepts custom scheme jp.co.sonrisa.fido2demo://magic?t=…', () {
+      expect(
+        parseMagicLinkToken(Uri.parse('jp.co.sonrisa.fido2demo://magic?t=xyz789')),
+        'xyz789',
+      );
+    });
+
+    test('rejects custom scheme with wrong host', () {
+      // OIDC コールバック等の他用途 URI は無視する
+      expect(
+        parseMagicLinkToken(Uri.parse('jp.co.sonrisa.fido2demo://callback?t=xyz')),
+        isNull,
+      );
+    });
+
+    test('rejects custom scheme with empty token', () {
+      expect(
+        parseMagicLinkToken(Uri.parse('jp.co.sonrisa.fido2demo://magic?t=')),
+        isNull,
+      );
+    });
   });
 }
