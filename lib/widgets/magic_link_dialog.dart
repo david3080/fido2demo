@@ -42,17 +42,8 @@ class _MagicLinkDialogState extends ConsumerState<MagicLinkDialog> {
             body: jsonEncode({'token': widget.token}),
           )
           .timeout(const Duration(seconds: 30));
-      if (res.statusCode == 400) {
-        throw Exception('リンクの有効期限が切れたか、既に使用されています。もう一度メアドから送信してください。');
-      }
-      if (res.statusCode == 409) {
-        throw Exception('既に登録済みです。サインインしてください。');
-      }
-      if (res.statusCode >= 500) {
-        throw Exception('サーバが一時的に利用できません。');
-      }
       if (res.statusCode != 200) {
-        throw Exception('予期しないエラー (HTTP ${res.statusCode})');
+        throw Exception(_explainHttp(res.statusCode, res.body));
       }
       final body = jsonDecode(res.body) as Map<String, dynamic>;
       if (mounted) {
@@ -73,6 +64,23 @@ class _MagicLinkDialogState extends ConsumerState<MagicLinkDialog> {
     }
   }
 
+  /// HTTP ステータスとレスポンス本文を、利用者向けの日本語メッセージへ変換する。
+  /// サーバは 400 で "invalid or expired token" / "challenge invalid/expired" 等の
+  /// テキストを返すので、それを「有効期限切れ」と明示的に伝える。
+  String _explainHttp(int code, String body) {
+    final b = body.toLowerCase();
+    final expiredLike =
+        b.contains('expired') || b.contains('invalid or') || b.contains('challenge invalid');
+    if (code == 401 || (code == 400 && expiredLike)) {
+      return '登録の有効期限が切れたか、リンクが無効です（30分以内に完了してください）。\n'
+          'ダイアログを閉じて、新規登録から再度メールを送信してください。';
+    }
+    if (code == 409) return '既に登録済みです。サインインしてください。';
+    if (code >= 500) return 'サーバが一時的に利用できません。しばらくしてから再試行してください。';
+    if (code == 400) return '登録に失敗しました: ${body.isEmpty ? "不明" : body}';
+    return '予期しないエラー (HTTP $code) ${body.isEmpty ? "" : "— $body"}';
+  }
+
   Future<void> _registerPasskey() async {
     if (_verifiedToken == null) return;
     setState(() {
@@ -88,11 +96,9 @@ class _MagicLinkDialogState extends ConsumerState<MagicLinkDialog> {
             body: jsonEncode({'token': _verifiedToken}),
           )
           .timeout(const Duration(seconds: 30));
-      if (optsRes.statusCode == 401) {
-        throw Exception('登録セッションが切れました。最初からやり直してください。');
-      }
+      // ここが Face ID 起動前のプリチェック: 期限切れ等はこの 200/!=200 で先に弾かれる。
       if (optsRes.statusCode != 200) {
-        throw Exception('options 取得失敗 (HTTP ${optsRes.statusCode})');
+        throw Exception(_explainHttp(optsRes.statusCode, optsRes.body));
       }
       final req = RegisterRequestType.fromJsonString(optsRes.body);
       final resp = await PasskeyAuthenticator().register(req);
@@ -110,7 +116,7 @@ class _MagicLinkDialogState extends ConsumerState<MagicLinkDialog> {
           )
           .timeout(const Duration(seconds: 30));
       if (verifyRes.statusCode != 201) {
-        throw Exception('Passkey 検証失敗 (HTTP ${verifyRes.statusCode})');
+        throw Exception(_explainHttp(verifyRes.statusCode, verifyRes.body));
       }
       if (!mounted) return;
       setState(() => _status = '登録完了。サインインします…');
