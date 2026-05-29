@@ -40,7 +40,7 @@ void main() {
     ));
     expect(find.text('送金 1000円 を承認'), findsOneWidget);
     expect(find.textContaining('openid profile'), findsOneWidget);
-    expect(find.text('My RP からのログイン要求が届いています。'), findsOneWidget);
+    expect(find.text('My RP からの要求が届いています。'), findsOneWidget);
   });
 
   testWidgets('承認が失敗するとエラーと閉じるボタンを表示する', (tester) async {
