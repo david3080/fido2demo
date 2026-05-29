@@ -89,4 +89,36 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('ログイン承認'), findsNothing); // 閉じた
   });
+
+  testWidgets('mandate がある時はタイトルを 操作の承認 にし MandateView を出す', (tester) async {
+    final pending = PendingApproval(
+      authReqId: 'AR2',
+      clientName: 'agent',
+      scope: 'openid',
+      bindingMessage: 'リーサポイント 500 PT を Sakura Cafe で使用',
+      authorizationDetails: const [
+        {
+          'type': 'points',
+          'actions': ['redeem'],
+          'amount': '500',
+          'program': 'リーサ',
+          'merchant': 'Sakura Cafe',
+        }
+      ],
+    );
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        httpClientProvider.overrideWithValue(MockClient((_) async => http.Response('', 200))),
+        passkeyPortProvider.overrideWithValue(_FakePasskey(const {})),
+      ],
+      child: MaterialApp(home: Scaffold(body: ApprovalDialog(pending: pending))),
+    ));
+    expect(find.text('操作の承認'), findsOneWidget);
+    expect(find.text('ログイン承認'), findsNothing);
+    // MandateView の中身が出ている
+    expect(find.text('500'), findsOneWidget);
+    expect(find.text('PT'), findsOneWidget);
+    // binding_message も補足として残っている
+    expect(find.text('リーサポイント 500 PT を Sakura Cafe で使用'), findsOneWidget);
+  });
 }
