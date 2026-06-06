@@ -1,7 +1,7 @@
 /// OP の独自エンドポイント（OIDC 標準外）。
 ///
 /// discovery (.well-known/openid-configuration) のベンダー名前空間
-/// `sonrisa_endpoints` から URL を取得し、アプリ内にパスをハードコードしない。
+/// `custom_endpoints` から URL を取得し、アプリ内にパスをハードコードしない。
 /// これにより OP 側でパスを改名してもアプリは無改修で追従できる。
 ///
 /// 標準 OIDC エンドポイント（/authorize, /token, /userinfo, /jwks 等）は
@@ -29,16 +29,16 @@ class OpEndpoints {
   /// 必要なフィールドが欠けていれば起動時に例外で落とす（fail-closed）。
   /// 誤ったパスへ DPoP リクエストを投げて静かに失敗するより、即座に気付けるようにする。
   factory OpEndpoints.fromDiscoverySrc(Map<String, dynamic> src) {
-    final raw = src['sonrisa_endpoints'];
+    final raw = src['custom_endpoints'];
     if (raw is! Map) {
       throw StateError(
-        'discovery に sonrisa_endpoints がありません（OP が古い可能性）。',
+        'discovery に custom_endpoints がありません（OP が古い可能性）。',
       );
     }
     Uri pick(String key) {
       final v = raw[key];
       if (v is! String || v.isEmpty) {
-        throw StateError('discovery の sonrisa_endpoints.$key がありません。');
+        throw StateError('discovery の custom_endpoints.$key がありません。');
       }
       return Uri.parse(v);
     }
