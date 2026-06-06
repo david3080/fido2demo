@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
+import 'op_endpoints.dart';
+
 /// HTTP ステータスを利用者向けの日本語メッセージに変換する例外。
 class RegistrationException implements Exception {
   RegistrationException(this.message);
@@ -9,17 +11,17 @@ class RegistrationException implements Exception {
   String toString() => message;
 }
 
-/// 新規登録: メアド宛に Magic Link 確認メールを送る (/register/email-challenge)。
+/// 新規登録: メアド宛に Magic Link 確認メールを送る (signup_email_challenge)。
 class RegistrationService {
-  RegistrationService({required this.client, required this.opBase});
+  RegistrationService({required this.client, required this.endpoints});
   final http.Client client;
-  final String opBase;
+  final OpEndpoints endpoints;
 
   /// 成功で正常終了(204)。429/5xx/その他は利用者向けメッセージの例外。
   Future<void> sendEmailChallenge(String email) async {
     final res = await client
         .post(
-          Uri.parse('$opBase/oidc/register/email-challenge'),
+          endpoints.signupEmailChallenge,
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({'email': email}),
         )

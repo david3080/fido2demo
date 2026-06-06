@@ -6,6 +6,7 @@ import 'package:oidc/oidc.dart';
 
 import 'ciba_approval.dart';
 import 'ciba_request.dart';
+import 'op_endpoints.dart';
 import 'profile_service.dart';
 import 'registration_service.dart';
 import 'remote_cursor.dart';
@@ -17,6 +18,11 @@ final oidcManagerProvider = Provider<OidcUserManager>(
   (ref) => throw UnimplementedError('override in main()'),
 );
 final dpopClientProvider = Provider<DpopHttpClient>(
+  (ref) => throw UnimplementedError('override in main()'),
+);
+
+/// discovery から解決した OP 独自エンドポイント。main() で構築して注入する。
+final opEndpointsProvider = Provider<OpEndpoints>(
   (ref) => throw UnimplementedError('override in main()'),
 );
 
@@ -43,12 +49,18 @@ final cibaApprovalServiceProvider = Provider<CibaApprovalService>((ref) {
 
 /// プロフィール取得/保存・FCM token 登録。DPoP 付きクライアントを使う。
 final profileServiceProvider = Provider<ProfileService>((ref) {
-  return ProfileService(client: ref.watch(dpopClientProvider), opBase: opBase);
+  return ProfileService(
+    client: ref.watch(dpopClientProvider),
+    endpoints: ref.watch(opEndpointsProvider),
+  );
 });
 
 /// 新規登録メール送信。token 不要なので素の httpClient を使う。
 final registrationServiceProvider = Provider<RegistrationService>((ref) {
-  return RegistrationService(client: ref.watch(httpClientProvider), opBase: opBase);
+  return RegistrationService(
+    client: ref.watch(httpClientProvider),
+    endpoints: ref.watch(opEndpointsProvider),
+  );
 });
 
 /// 認証ユーザー。currentUser を seed してから userChanges() を流す
