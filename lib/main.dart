@@ -13,6 +13,7 @@ import 'package:oidc_default_store/oidc_default_store.dart';
 import 'ciba_request.dart';
 import 'firebase_options.dart';
 import 'magic_link.dart';
+import 'op_endpoints.dart';
 import 'providers.dart';
 import 'remote_cursor.dart';
 import 'ui_shared.dart';
@@ -117,6 +118,10 @@ Future<void> main() async {
     ),
   );
   await manager.init();
+  // OP 独自エンドポイントは discovery から解決する（パスをハードコードしない）。
+  // OP 側でパスを改名してもアプリは無改修で追従できる。欠落時は fromDiscoverySrc が
+  // 例外で落とす（誤パスへ静かに投げるより起動時に気付く）。
+  final opEndpoints = OpEndpoints.fromDiscoverySrc(manager.discoveryDocument.src);
   // 通知ハンドラ登録 (フォアグラウンド + バックグラウンドから通知タップ)
   FirebaseMessaging.onMessage.listen(_handleCibaMessage);
   FirebaseMessaging.onMessageOpenedApp.listen(_handleCibaMessage);
@@ -143,7 +148,7 @@ Future<void> main() async {
     if (accessToken == null) return;
     try {
       await dpopClient.post(
-        Uri.parse('$opBase/oidc/me/fcm-tokens'),
+        opEndpoints.fcmToken,
         headers: {
           'Authorization': 'Bearer $accessToken',
           'Content-Type': 'application/json',
@@ -158,6 +163,7 @@ Future<void> main() async {
       overrides: [
         oidcManagerProvider.overrideWithValue(manager),
         dpopClientProvider.overrideWithValue(dpopClient),
+        opEndpointsProvider.overrideWithValue(opEndpoints),
       ],
       child: const MyApp(),
     ),
