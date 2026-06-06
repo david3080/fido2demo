@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
+import 'op_endpoints.dart';
+
 class ProfileException implements Exception {
   ProfileException(this.message);
   final String message;
@@ -34,11 +36,11 @@ class ProfileData {
 /// プロフィール取得/保存と FCM token 登録。client は DPoP 付き http.Client を注入する
 /// （access token は呼び出し側が渡す）。
 class ProfileService {
-  ProfileService({required this.client, required this.opBase});
+  ProfileService({required this.client, required this.endpoints});
   final http.Client client;
-  final String opBase;
+  final OpEndpoints endpoints;
 
-  Uri get _profile => Uri.parse('$opBase/oidc/profile');
+  Uri get _profile => endpoints.profile;
 
   /// 取得。200 以外は null（空で編集開始できる）。
   Future<ProfileData?> load(String accessToken) async {
@@ -64,7 +66,7 @@ class ProfileService {
   /// CIBA 通知の宛先になる FCM token を登録。失敗は呼び出し側でベストエフォート扱い。
   Future<void> registerFcmToken(String accessToken, String fcmToken) async {
     await client.post(
-      Uri.parse('$opBase/oidc/me/fcm-tokens'),
+      endpoints.fcmToken,
       headers: {'Authorization': 'Bearer $accessToken', 'Content-Type': 'application/json'},
       body: jsonEncode({'token': fcmToken, 'platform': 'ios'}),
     );

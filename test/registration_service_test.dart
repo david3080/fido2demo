@@ -1,11 +1,22 @@
+import 'package:fido2demo/op_endpoints.dart';
 import 'package:fido2demo/registration_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
+final _endpoints = OpEndpoints(
+  signupEmailChallenge: Uri.parse('https://op/oidc/signup/email-challenge'),
+  signupVerifyEmail: Uri.parse('https://op/oidc/signup/verify-email'),
+  signupPasskeyOptions: Uri.parse('https://op/oidc/signup/passkey/options'),
+  signupPasskeyVerify: Uri.parse('https://op/oidc/signup/passkey/verify'),
+  profile: Uri.parse('https://op/oidc/me/profile'),
+  fcmToken: Uri.parse('https://op/oidc/ciba/fcm-tokens'),
+  mandateConsume: Uri.parse('https://op/oidc/oauth/mandate/consume'),
+);
+
 RegistrationService _svc(int status) => RegistrationService(
       client: MockClient((req) async => http.Response('', status)),
-      opBase: 'https://op',
+      endpoints: _endpoints,
     );
 
 void main() {

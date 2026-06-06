@@ -37,7 +37,7 @@ class _MagicLinkDialogState extends ConsumerState<MagicLinkDialog> {
     try {
       final res = await http
           .post(
-            Uri.parse('$opBase/oidc/register/verify-email'),
+            ref.read(opEndpointsProvider).signupVerifyEmail,
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({'token': widget.token}),
           )
@@ -74,7 +74,7 @@ class _MagicLinkDialogState extends ConsumerState<MagicLinkDialog> {
     try {
       final optsRes = await http
           .post(
-            Uri.parse('$opBase/oidc/register/passkey/options'),
+            ref.read(opEndpointsProvider).signupPasskeyOptions,
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({'token': _verifiedToken}),
           )
@@ -90,7 +90,7 @@ class _MagicLinkDialogState extends ConsumerState<MagicLinkDialog> {
       final respMap = jsonDecode(resp.toJsonString()) as Map<String, dynamic>;
       final verifyRes = await http
           .post(
-            Uri.parse('$opBase/oidc/register/passkey/verify'),
+            ref.read(opEndpointsProvider).signupPasskeyVerify,
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({
               'token': _verifiedToken,
