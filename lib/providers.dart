@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:oidc/oidc.dart';
 
 import 'ciba_approval.dart';
+import 'ciba_pending_service.dart';
 import 'ciba_request.dart';
 import 'op_endpoints.dart';
 import 'profile_service.dart';
@@ -52,6 +53,16 @@ final profileServiceProvider = Provider<ProfileService>((ref) {
   return ProfileService(
     client: ref.watch(dpopClientProvider),
     endpoints: ref.watch(opEndpointsProvider),
+  );
+});
+
+/// 承認インボックス用 pending CIBA 取得。OP が ciba_pending を広告していなければ null。
+final cibaPendingServiceProvider = Provider<CibaPendingService?>((ref) {
+  final ep = ref.watch(opEndpointsProvider).cibaPending;
+  if (ep == null) return null;
+  return CibaPendingService(
+    client: ref.watch(dpopClientProvider),
+    endpoint: ep,
   );
 });
 

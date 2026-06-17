@@ -15,6 +15,7 @@ class OpEndpoints {
     required this.profile,
     required this.fcmToken,
     required this.mandateConsume,
+    this.cibaPending,
   });
 
   final Uri signupEmailChallenge;
@@ -24,6 +25,10 @@ class OpEndpoints {
   final Uri profile;
   final Uri fcmToken;
   final Uri mandateConsume;
+
+  /// 承認インボックスが自分宛の pending CIBA を取得する URL。
+  /// 旧 OP（discovery 未広告）でもアプリが落ちないよう任意扱い（null なら受信箱はプッシュのみ）。
+  final Uri? cibaPending;
 
   /// discovery の生 JSON（OidcProviderMetadata.src）から構築する。
   /// 必要なフィールドが欠けていれば起動時に例外で落とす（fail-closed）。
@@ -43,6 +48,12 @@ class OpEndpoints {
       return Uri.parse(v);
     }
 
+    Uri? pickOptional(String key) {
+      final v = raw[key];
+      if (v is! String || v.isEmpty) return null;
+      return Uri.parse(v);
+    }
+
     return OpEndpoints(
       signupEmailChallenge: pick('signup_email_challenge'),
       signupVerifyEmail: pick('signup_verify_email'),
@@ -51,6 +62,7 @@ class OpEndpoints {
       profile: pick('profile'),
       fcmToken: pick('fcm_token'),
       mandateConsume: pick('mandate_consume'),
+      cibaPending: pickOptional('ciba_pending'),
     );
   }
 }
