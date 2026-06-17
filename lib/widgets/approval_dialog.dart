@@ -46,8 +46,11 @@ class _ApprovalDialogState extends ConsumerState<ApprovalDialog> {
       await ref.read(cibaApprovalServiceProvider).approve(widget.pending);
       if (!mounted) return;
       Navigator.of(context).pop();
+      final msg = (widget.pending.authorizationDetails ?? const []).isNotEmpty
+          ? '承認しました。エージェントに権限を委譲しました。'
+          : '承認しました。Mac でサインインが完了します。';
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('承認しました。Mac でログインが完了するはずです。')),
+        SnackBar(content: Text(msg)),
       );
     } catch (e) {
       if (mounted) {
@@ -61,10 +64,12 @@ class _ApprovalDialogState extends ConsumerState<ApprovalDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final hasMandate = (widget.pending.authorizationDetails ?? const []).isNotEmpty;
+    final details = widget.pending.authorizationDetails ?? const [];
+    final hasMandate = details.isNotEmpty;
+    final hasPayment = details.any((e) => e['type'] == 'payment');
     return AlertDialog(
-      // mandate がある = 「ログイン」ではなく「個別操作の承認」なのでタイトルを変える。
-      title: Text(hasMandate ? '操作の承認' : 'ログイン承認'),
+      // mandate の有無・種別で「サインイン」か「委譲の承認」かを出し分ける。
+      title: Text(hasPayment ? '支払いの承認' : (hasMandate ? '操作の承認' : 'サインインの承認')),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -107,6 +112,18 @@ class _ApprovalDialogState extends ConsumerState<ApprovalDialog> {
                 style: const TextStyle(fontSize: 12, color: Colors.black54),
               ),
             ],
+            if (hasMandate) ...[
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: const [
+                  _SecChip(icon: Icons.fingerprint, label: 'パスキー承認'),
+                  _SecChip(icon: Icons.filter_1, label: '単回'),
+                  _SecChip(icon: Icons.shield_outlined, label: 'スコープ限定'),
+                ],
+              ),
+            ],
             const SizedBox(height: 8),
             Text(
               'scope: ${widget.pending.scope}',
@@ -145,6 +162,38 @@ class _ApprovalDialogState extends ConsumerState<ApprovalDialog> {
           label: const Text('承認 (Passkey)'),
         ),
       ],
+    );
+  }
+}
+
+/// 委譲の安全性を一目で示す小さなチップ（パスキー承認 / 単回 / スコープ限定）。
+class _SecChip extends StatelessWidget {
+  const _SecChip({required this.icon, required this.label});
+  final IconData icon;
+  final String label;
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.indigo.shade50,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: Colors.indigo.shade700),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              color: Colors.indigo.shade700,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
