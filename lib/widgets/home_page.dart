@@ -4,6 +4,8 @@ import 'package:oidc/oidc.dart';
 import '../ciba_request.dart';
 import '../providers.dart';
 import 'approval_dialog.dart';
+import 'approval_history.dart';
+import 'approval_inbox.dart';
 import 'cursor_overlay.dart';
 import 'login_view.dart';
 import 'magic_link_dialog.dart';
@@ -32,6 +34,9 @@ class HomePage extends ConsumerStatefulWidget {
 }
 
 class _HomePageState extends ConsumerState<HomePage> {
+  int _tabIndex = 0; // 0=承認インボックス, 1=履歴, 2=プロフィール
+  static const _titles = ['承認', '履歴', 'プロフィール'];
+
   @override
   void initState() {
     super.initState();
@@ -80,13 +85,29 @@ class _HomePageState extends ConsumerState<HomePage> {
     });
 
     final authUser = ref.watch(authUserProvider);
+    final user = authUser.asData?.value;
     return Scaffold(
+      // ログイン時は「承認デバイス」として承認/プロフィールのタブを出す。
+      appBar: user == null
+          ? null
+          : AppBar(
+              title: Text(_titles[_tabIndex]),
+              automaticallyImplyLeading: false,
+            ),
       body: SafeArea(
         child: Stack(
           children: [
             authUser.when(
-              data: (user) =>
-                  user == null ? const LoginView() : UserView(user: user),
+              data: (u) => u == null
+                  ? const LoginView()
+                  : IndexedStack(
+                      index: _tabIndex,
+                      children: [
+                        ApprovalInbox(user: u),
+                        ApprovalHistory(user: u),
+                        UserView(user: u),
+                      ],
+                    ),
               loading: () => const Center(child: CircularProgressIndicator()),
               error: (e, _) => Center(child: Text('エラー: $e')),
             ),
@@ -95,6 +116,28 @@ class _HomePageState extends ConsumerState<HomePage> {
           ],
         ),
       ),
+      bottomNavigationBar: user == null
+          ? null
+          : NavigationBar(
+              selectedIndex: _tabIndex,
+              onDestinationSelected: (i) => setState(() => _tabIndex = i),
+              destinations: const [
+                NavigationDestination(
+                  icon: Icon(Icons.inbox_outlined),
+                  selectedIcon: Icon(Icons.inbox),
+                  label: '承認',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.history),
+                  label: '履歴',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.person_outline),
+                  selectedIcon: Icon(Icons.person),
+                  label: 'プロフィール',
+                ),
+              ],
+            ),
     );
   }
 }

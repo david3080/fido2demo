@@ -49,4 +49,24 @@ class PendingApproval {
       authorizationDetails: ad,
     );
   }
+
+  /// OP の `/ciba/pending`（JSON 配列）1 要素から復元する。
+  /// FCM data と違い authorization_details は既に配列で来る（文字列ではない）。
+  /// 識別子は client_id を表示名として使う。
+  static PendingApproval? fromPendingJson(Map<String, dynamic> j) {
+    final authReqId = j['auth_req_id'] as String?;
+    if (authReqId == null) return null;
+    List<Map<String, dynamic>>? ad;
+    final raw = j['authorization_details'];
+    if (raw is List) {
+      ad = raw.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
+    }
+    return PendingApproval(
+      authReqId: authReqId,
+      clientName: (j['client_id'] as String?) ?? '?',
+      scope: (j['scope'] as String?) ?? '',
+      bindingMessage: (j['binding_message'] as String?) ?? '',
+      authorizationDetails: ad,
+    );
+  }
 }
