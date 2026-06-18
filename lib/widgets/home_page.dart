@@ -4,6 +4,7 @@ import 'package:oidc/oidc.dart';
 import '../ciba_request.dart';
 import '../providers.dart';
 import 'approval_dialog.dart';
+import 'approval_history.dart';
 import 'approval_inbox.dart';
 import 'cursor_overlay.dart';
 import 'login_view.dart';
@@ -33,7 +34,8 @@ class HomePage extends ConsumerStatefulWidget {
 }
 
 class _HomePageState extends ConsumerState<HomePage> {
-  int _tabIndex = 0; // 0=承認インボックス, 1=プロフィール
+  int _tabIndex = 0; // 0=承認インボックス, 1=履歴, 2=プロフィール
+  static const _titles = ['承認', '履歴', 'プロフィール'];
 
   @override
   void initState() {
@@ -89,7 +91,7 @@ class _HomePageState extends ConsumerState<HomePage> {
       appBar: user == null
           ? null
           : AppBar(
-              title: Text(_tabIndex == 0 ? '承認' : 'プロフィール'),
+              title: Text(_titles[_tabIndex]),
               automaticallyImplyLeading: false,
             ),
       body: SafeArea(
@@ -102,6 +104,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                       index: _tabIndex,
                       children: [
                         ApprovalInbox(user: u),
+                        ApprovalHistory(user: u),
                         UserView(user: u),
                       ],
                     ),
@@ -123,6 +126,10 @@ class _HomePageState extends ConsumerState<HomePage> {
                   icon: Icon(Icons.inbox_outlined),
                   selectedIcon: Icon(Icons.inbox),
                   label: '承認',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.history),
+                  label: '履歴',
                 ),
                 NavigationDestination(
                   icon: Icon(Icons.person_outline),

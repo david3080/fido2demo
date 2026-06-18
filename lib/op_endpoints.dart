@@ -16,6 +16,7 @@ class OpEndpoints {
     required this.fcmToken,
     required this.mandateConsume,
     this.cibaPending,
+    this.cibaHistory,
   });
 
   final Uri signupEmailChallenge;
@@ -29,6 +30,9 @@ class OpEndpoints {
   /// 承認インボックスが自分宛の pending CIBA を取得する URL。
   /// 旧 OP（discovery 未広告）でもアプリが落ちないよう任意扱い（null なら受信箱はプッシュのみ）。
   final Uri? cibaPending;
+
+  /// 承認履歴（承認/拒否/期限切れ）取得 URL。未広告 OP では null（履歴タブは空表示）。
+  final Uri? cibaHistory;
 
   /// discovery の生 JSON（OidcProviderMetadata.src）から構築する。
   /// 必要なフィールドが欠けていれば起動時に例外で落とす（fail-closed）。
@@ -63,6 +67,7 @@ class OpEndpoints {
       fcmToken: pick('fcm_token'),
       mandateConsume: pick('mandate_consume'),
       cibaPending: pickOptional('ciba_pending'),
+      cibaHistory: pickOptional('ciba_history'),
     );
   }
 }

@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:oidc/oidc.dart';
 
 import 'ciba_approval.dart';
+import 'ciba_history_service.dart';
 import 'ciba_pending_service.dart';
 import 'ciba_request.dart';
 import 'op_endpoints.dart';
@@ -61,6 +62,16 @@ final cibaPendingServiceProvider = Provider<CibaPendingService?>((ref) {
   final ep = ref.watch(opEndpointsProvider).cibaPending;
   if (ep == null) return null;
   return CibaPendingService(
+    client: ref.watch(dpopClientProvider),
+    endpoint: ep,
+  );
+});
+
+/// 承認履歴取得。OP が ciba_history を広告していなければ null（履歴タブは空表示）。
+final cibaHistoryServiceProvider = Provider<CibaHistoryService?>((ref) {
+  final ep = ref.watch(opEndpointsProvider).cibaHistory;
+  if (ep == null) return null;
+  return CibaHistoryService(
     client: ref.watch(dpopClientProvider),
     endpoint: ep,
   );
