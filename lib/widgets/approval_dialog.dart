@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../ciba_approval.dart';
 import '../ciba_request.dart';
 import '../providers.dart';
 import 'mandate_view.dart';
@@ -15,6 +16,23 @@ class _ApprovalDialogState extends ConsumerState<ApprovalDialog> {
   bool _busy = false;
   String? _error;
 
+  /// 承認/拒否のエラーを一貫処理する。期限切れ/処理済み(stale)はダイアログを閉じて
+  /// 統一メッセージを出す（承認は無反応・拒否は偽成功、という不整合を無くす）。
+  void _onActionError(Object e) {
+    if (!mounted) return;
+    if (e is CibaApprovalException && e.stale) {
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('この要求は期限切れ（または処理済み）です。')),
+      );
+      return;
+    }
+    setState(() {
+      _error = e.toString();
+      _busy = false;
+    });
+  }
+
   Future<void> _reject() async {
     setState(() {
       _busy = true;
@@ -28,12 +46,7 @@ class _ApprovalDialogState extends ConsumerState<ApprovalDialog> {
         const SnackBar(content: Text('拒否しました。要求元にも通知されます。')),
       );
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _error = e.toString();
-          _busy = false;
-        });
-      }
+      _onActionError(e);
     }
   }
 
@@ -53,12 +66,7 @@ class _ApprovalDialogState extends ConsumerState<ApprovalDialog> {
         SnackBar(content: Text(msg)),
       );
     } catch (e) {
-      if (mounted) {
-        setState(() {
-          _error = e.toString();
-          _busy = false;
-        });
-      }
+      _onActionError(e);
     }
   }
 
@@ -67,9 +75,20 @@ class _ApprovalDialogState extends ConsumerState<ApprovalDialog> {
     final details = widget.pending.authorizationDetails ?? const [];
     final hasMandate = details.isNotEmpty;
     final hasPayment = details.any((e) => e['type'] == 'payment');
+    final titleText = hasPayment ? '支払いの承認' : (hasMandate ? '操作の承認' : 'サインインの承認');
     return AlertDialog(
       // mandate の有無・種別で「サインイン」か「委譲の承認」かを出し分ける。
-      title: Text(hasPayment ? '支払いの承認' : (hasMandate ? '操作の承認' : 'サインインの承認')),
+      // カードから開く想定なので、操作せず閉じられるよう × を置く。
+      title: Row(
+        children: [
+          Expanded(child: Text(titleText)),
+          IconButton(
+            icon: const Icon(Icons.close),
+            tooltip: '閉じる',
+            onPressed: _busy ? null : () => Navigator.of(context).pop(),
+          ),
+        ],
+      ),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,

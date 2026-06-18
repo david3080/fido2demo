@@ -201,16 +201,7 @@ class _UserViewState extends ConsumerState<UserView> {
                 : const Icon(Icons.save),
             label: const Text('保存'),
           ),
-          const SizedBox(height: 24),
-          FilledButton.tonalIcon(
-            key: cursorTargetKeys['logout'],
-            // ブラウザを開く RP-initiated ログアウトではなくローカルでトークンを破棄する。
-            // ログインは毎回 prompt=login を強制するため、OP セッションが残っても
-            // 勝手な自動ログインは起きない (= ブラウザの点滅を無くせる)。
-            onPressed: () => ref.read(oidcManagerProvider).forgetUser(),
-            icon: const Icon(Icons.logout),
-            label: const Text('ログアウト'),
-          ),
+          // ログアウトはヘッダ（AppBar 右）に集約した。
         ],
       ),
     );

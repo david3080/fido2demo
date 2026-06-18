@@ -39,10 +39,10 @@ class _ApprovalInboxState extends ConsumerState<ApprovalInbox> {
   Future<void> _open(PendingApproval p) async {
     await showDialog<void>(
       context: context,
-      barrierDismissible: false,
+      barrierDismissible: true, // カード起点なので操作せず閉じられてよい。
       builder: (_) => ApprovalDialog(pending: p),
     );
-    _refresh(); // 承認/拒否後に一覧を更新
+    _refresh(); // 承認/拒否/閉じる後に一覧を更新
   }
 
   @override
