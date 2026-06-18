@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:oidc/oidc.dart';
 import '../ciba_request.dart';
 import '../providers.dart';
-import 'approval_dialog.dart';
 import 'approval_history.dart';
 import 'approval_inbox.dart';
 import 'cursor_overlay.dart';
@@ -42,21 +41,24 @@ class _HomePageState extends ConsumerState<HomePage> {
     super.initState();
     // コールド起動 (getInitialMessage/getInitialLink) の値は runApp 前に sink へ
     // 入るため provider の初期 state に既に乗っており、ref.listen は「変化」が無く
-    // 発火しない。初期 state を一度だけ拾ってダイアログを出す。
+    // 発火しない。初期 state を一度だけ拾って処理する。
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final pending = ref.read(pendingApprovalProvider);
-      if (pending != null) _showApproval(pending);
+      if (ref.read(pendingApprovalProvider) != null) _onPushApproval();
       final token = ref.read(magicLinkTokenProvider);
       if (token != null) _showMagicLink(token);
     });
   }
 
-  void _showApproval(PendingApproval pending) {
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => ApprovalDialog(pending: pending),
-    ).whenComplete(() => ref.read(pendingApprovalProvider.notifier).reset());
+  /// push 受信時: モーダルは強制しない。承認タブ（インボックス）へ切り替え、通知する。
+  /// インボックスは自身で pendingApprovalProvider を listen して一覧を更新する。
+  /// 承認は「カードをタップ → ダイアログ」起点に統一（古い要求に強制操作させない）。
+  void _onPushApproval() {
+    if (!mounted) return;
+    setState(() => _tabIndex = 0);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('新しい承認要求が届きました')),
+    );
+    ref.read(pendingApprovalProvider.notifier).reset();
   }
 
   void _showMagicLink(String token) {
@@ -69,9 +71,9 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    // 起動後の CIBA 承認要求 (null→値) でダイアログを出し、閉じたらシンクを空に戻す。
+    // 起動後の CIBA 承認要求 (push) は承認タブへ誘導する（モーダルは強制しない）。
     ref.listen<PendingApproval?>(pendingApprovalProvider, (prev, next) {
-      if (next != null && prev == null) _showApproval(next);
+      if (next != null) _onPushApproval();
     });
     // Magic Link で復帰 (null→値) で Passkey 登録ダイアログ。
     ref.listen<String?>(magicLinkTokenProvider, (prev, next) {
