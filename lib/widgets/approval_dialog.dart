@@ -75,9 +75,20 @@ class _ApprovalDialogState extends ConsumerState<ApprovalDialog> {
     final details = widget.pending.authorizationDetails ?? const [];
     final hasMandate = details.isNotEmpty;
     final hasPayment = details.any((e) => e['type'] == 'payment');
+    final titleText = hasPayment ? '支払いの承認' : (hasMandate ? '操作の承認' : 'サインインの承認');
     return AlertDialog(
       // mandate の有無・種別で「サインイン」か「委譲の承認」かを出し分ける。
-      title: Text(hasPayment ? '支払いの承認' : (hasMandate ? '操作の承認' : 'サインインの承認')),
+      // カードから開く想定なので、操作せず閉じられるよう × を置く。
+      title: Row(
+        children: [
+          Expanded(child: Text(titleText)),
+          IconButton(
+            icon: const Icon(Icons.close),
+            tooltip: '閉じる',
+            onPressed: _busy ? null : () => Navigator.of(context).pop(),
+          ),
+        ],
+      ),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,

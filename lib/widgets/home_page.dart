@@ -95,6 +95,14 @@ class _HomePageState extends ConsumerState<HomePage> {
           : AppBar(
               title: Text(_titles[_tabIndex]),
               automaticallyImplyLeading: false,
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.logout),
+                  tooltip: 'ログアウト',
+                  // ブラウザを開く RP-initiated ログアウトではなくローカルでトークン破棄。
+                  onPressed: () => ref.read(oidcManagerProvider).forgetUser(),
+                ),
+              ],
             ),
       body: SafeArea(
         child: Stack(
