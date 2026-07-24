@@ -18,6 +18,7 @@ import 'op_endpoints.dart';
 import 'providers.dart';
 import 'remote_cursor.dart';
 import 'ui_shared.dart';
+import 'widgets/connection_error_app.dart';
 import 'widgets/home_page.dart';
 
 // DPoP 用 ES256 鍵とそれを使う HTTP クライアント。
@@ -106,26 +107,38 @@ Future<void> main() async {
   // 設定画面で変更した接続先(SharedPreferences)を読む。未設定なら本番既定値。
   final opBase = await loadOpBase();
 
-  final manager = OidcUserManager.lazy(
-    discoveryDocumentUri: OidcUtils.getOpenIdConfigWellKnownUri(
-      Uri.parse('$opBase/oidc'),
-    ),
-    clientCredentials:
-        const OidcClientAuthentication.none(clientId: 'mobile-rp'),
-    store: OidcDefaultStore(),
-    httpClient: dpopClient,
-    settings: OidcUserManagerSettings(
-      scope: const ['openid', 'profile', 'email', 'offline_access'],
-      redirectUri: Uri.parse('jp.co.sonrisa.fido2demo://callback'),
-      postLogoutRedirectUri: Uri.parse('jp.co.sonrisa.fido2demo://logout'),
-      userInfoSettings: const OidcUserInfoSettings(sendUserInfoRequest: true),
-    ),
-  );
-  await manager.init();
-  // OP 独自エンドポイントは discovery から解決する（パスをハードコードしない）。
-  // OP 側でパスを改名してもアプリは無改修で追従できる。欠落時は fromDiscoverySrc が
-  // 例外で落とす（誤パスへ静かに投げるより起動時に気付く）。
-  final opEndpoints = OpEndpoints.fromDiscoverySrc(manager.discoveryDocument.src);
+  // 接続先が到達不能(誤ったドメイン設定・証明書未反映等)だと discovery 取得に失敗する。
+  // ここで捕まえず main() を落とすと runApp 前にクラッシュし、次回起動も同じ設定を
+  // 読んで同じ場所で落ちる => 白画面のまま設定画面にも辿り着けず詰む。
+  // 必ず ConnectionErrorApp へフォールバックし、設定を直せる経路を残す。
+  OidcUserManager manager;
+  OpEndpoints opEndpoints;
+  try {
+    manager = OidcUserManager.lazy(
+      discoveryDocumentUri: OidcUtils.getOpenIdConfigWellKnownUri(
+        Uri.parse('$opBase/oidc'),
+      ),
+      clientCredentials:
+          const OidcClientAuthentication.none(clientId: 'mobile-rp'),
+      store: OidcDefaultStore(),
+      httpClient: dpopClient,
+      settings: OidcUserManagerSettings(
+        scope: const ['openid', 'profile', 'email', 'offline_access'],
+        redirectUri: Uri.parse('jp.co.sonrisa.fido2demo://callback'),
+        postLogoutRedirectUri: Uri.parse('jp.co.sonrisa.fido2demo://logout'),
+        userInfoSettings: const OidcUserInfoSettings(sendUserInfoRequest: true),
+      ),
+    );
+    await manager.init().timeout(const Duration(seconds: 15));
+    // OP 独自エンドポイントは discovery から解決する（パスをハードコードしない）。
+    // OP 側でパスを改名してもアプリは無改修で追従できる。欠落時は fromDiscoverySrc が
+    // 例外で落とす（誤パスへ静かに投げるより起動時に気付く）。
+    opEndpoints = OpEndpoints.fromDiscoverySrc(manager.discoveryDocument.src);
+  } catch (e) {
+    debugPrint('OP init failed for $opBase: $e');
+    runApp(ConnectionErrorApp(opBase: opBase, error: e));
+    return;
+  }
   // 通知ハンドラ登録 (フォアグラウンド + バックグラウンドから通知タップ)
   FirebaseMessaging.onMessage.listen(_handleCibaMessage);
   FirebaseMessaging.onMessageOpenedApp.listen(_handleCibaMessage);
