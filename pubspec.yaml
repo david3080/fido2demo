@@ -42,6 +42,7 @@ dependencies:
   passkeys: ^2.19.0
   app_links: ^6.4.0
   flutter_secure_storage: ^10.2.0
+  shared_preferences: ^2.5.3
   dart_dpop:
     git:
       url: https://github.com/david3080/dart_dpop.git

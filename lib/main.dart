@@ -13,6 +13,7 @@ import 'package:oidc_default_store/oidc_default_store.dart';
 import 'ciba_request.dart';
 import 'firebase_options.dart';
 import 'magic_link.dart';
+import 'op_base_settings.dart';
 import 'op_endpoints.dart';
 import 'providers.dart';
 import 'remote_cursor.dart';
@@ -102,6 +103,9 @@ Future<void> main() async {
   final dpopGen = DpopProofGenerator(key: dpopKey);
   final dpopClient = DpopHttpClient(generator: dpopGen);
 
+  // 設定画面で変更した接続先(SharedPreferences)を読む。未設定なら本番既定値。
+  final opBase = await loadOpBase();
+
   final manager = OidcUserManager.lazy(
     discoveryDocumentUri: OidcUtils.getOpenIdConfigWellKnownUri(
       Uri.parse('$opBase/oidc'),
@@ -161,6 +165,7 @@ Future<void> main() async {
   runApp(
     ProviderScope(
       overrides: [
+        opBaseProvider.overrideWithValue(opBase),
         oidcManagerProvider.overrideWithValue(manager),
         dpopClientProvider.overrideWithValue(dpopClient),
         opEndpointsProvider.overrideWithValue(opEndpoints),

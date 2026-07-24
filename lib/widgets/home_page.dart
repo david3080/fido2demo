@@ -8,6 +8,7 @@ import 'approval_inbox.dart';
 import 'cursor_overlay.dart';
 import 'login_view.dart';
 import 'magic_link_dialog.dart';
+import 'settings_page.dart';
 import 'user_view.dart';
 
 class MyApp extends StatelessWidget {
@@ -88,14 +89,27 @@ class _HomePageState extends ConsumerState<HomePage> {
 
     final authUser = ref.watch(authUserProvider);
     final user = authUser.asData?.value;
+    final settingsAction = IconButton(
+      icon: const Icon(Icons.settings),
+      tooltip: '接続先設定',
+      onPressed: () => Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const SettingsPage()),
+      ),
+    );
     return Scaffold(
       // ログイン時は「承認デバイス」として承認/プロフィールのタブを出す。
+      // 未ログイン時も接続先を切り替えられるよう設定アイコンだけ出す。
       appBar: user == null
-          ? null
+          ? AppBar(
+              title: const Text('fido2demo'),
+              automaticallyImplyLeading: false,
+              actions: [settingsAction],
+            )
           : AppBar(
               title: Text(_titles[_tabIndex]),
               automaticallyImplyLeading: false,
               actions: [
+                settingsAction,
                 IconButton(
                   icon: const Icon(Icons.logout),
                   tooltip: 'ログアウト',

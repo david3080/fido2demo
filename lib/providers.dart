@@ -13,7 +13,11 @@ import 'profile_service.dart';
 import 'registration_service.dart';
 import 'remote_cursor.dart';
 
-const opBase = 'https://oidc.sonrisa.co.jp';
+/// 接続先 OP のベース URL。main() で SharedPreferences から読んで override する
+/// （設定画面から変更した場合は次回起動時に反映。op_base_settings.dart 参照）。
+final opBaseProvider = Provider<String>(
+  (ref) => throw UnimplementedError('override in main()'),
+);
 
 /// main() で初期化したインスタンスを override で注入する。
 final oidcManagerProvider = Provider<OidcUserManager>(
@@ -45,7 +49,7 @@ final cibaApprovalServiceProvider = Provider<CibaApprovalService>((ref) {
   return CibaApprovalService(
     client: ref.watch(httpClientProvider),
     passkey: ref.watch(passkeyPortProvider),
-    opBase: opBase,
+    opBase: ref.watch(opBaseProvider),
   );
 });
 
