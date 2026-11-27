@@ -35,11 +35,19 @@ class CibaApprovalException implements Exception {
 /// 期限切れ/処理済みを示す HTTP ステータスか。
 bool _isStale(int status) => status == 404 || status == 409 || status == 410;
 
-/// CIBA 承認/拒否のオーケストレーション。承認はパスキー assertion 自体が本人性を
-/// 証明するためログイン(access token)不要。エンドポイントは公開なので素の HTTP で呼ぶ。
+/// CIBA 承認/拒否のオーケストレーション。
+/// passkey-options と reject は、要求の宛先の利用者だけが呼べる（OP は承認のアプリの
+/// access token で名乗らせる）ので、[authClient]（DPoP 付き）で token を付けて呼ぶ。
+/// approve は passkey の assertion が本人の確かめなので、token を付けない [client] で呼ぶ。
 class CibaApprovalService {
-  CibaApprovalService({required this.client, required this.passkey, required this.opBase});
+  CibaApprovalService({
+    required this.client,
+    required this.authClient,
+    required this.passkey,
+    required this.opBase,
+  });
   final http.Client client;
+  final http.Client authClient;
   final PasskeyPort passkey;
   final String opBase;
 
@@ -47,10 +55,13 @@ class CibaApprovalService {
       Uri.parse('$opBase/oidc/ciba/$authReqId/$action');
 
   /// 承認: options 取得 → パスキー認証(UV 必須) → assertion を approve に送る。
-  Future<void> approve(PendingApproval pending) async {
-    final optsRes = await client.post(
+  Future<void> approve(PendingApproval pending, String accessToken) async {
+    final optsRes = await authClient.post(
       _u(pending.authReqId, 'passkey-options'),
-      headers: {'Content-Type': 'application/json'},
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $accessToken',
+      },
       body: '{}',
     );
     if (optsRes.statusCode != 200) {
@@ -70,10 +81,12 @@ class CibaApprovalService {
     }
   }
 
-  /// 拒否: ログイン不要の fail-safe 操作。拒否成立は 204。
-  /// 期限切れ/処理済みは 409（偽成功にしない）。
-  Future<void> reject(PendingApproval pending) async {
-    final res = await client.post(_u(pending.authReqId, 'reject'));
+  /// 拒否: 拒否成立は 204。期限切れ/処理済みは 409（偽成功にしない）。
+  Future<void> reject(PendingApproval pending, String accessToken) async {
+    final res = await authClient.post(
+      _u(pending.authReqId, 'reject'),
+      headers: {'Authorization': 'Bearer $accessToken'},
+    );
     if (res.statusCode == 204) return;
     throw CibaApprovalException('reject ${res.statusCode}: ${res.body}',
         stale: _isStale(res.statusCode));
