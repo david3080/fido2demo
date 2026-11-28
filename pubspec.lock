@@ -212,12 +212,10 @@ packages:
   dart_dpop:
     dependency: "direct main"
     description:
-      path: "."
-      ref: "v0.3.0"
-      resolved-ref: "8e94fe9a69955b4442f1a9bb78f97e6ce58614cd"
-      url: "https://github.com/son-risa/dart_dpop.git"
-    source: git
-    version: "0.2.0"
+      path: "packages/dart_dpop"
+      relative: true
+    source: path
+    version: "0.3.0"
   device_info_plus:
     dependency: transitive
     description:
