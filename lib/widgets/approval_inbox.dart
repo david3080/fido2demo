@@ -37,10 +37,12 @@ class _ApprovalInboxState extends ConsumerState<ApprovalInbox> {
   }
 
   Future<void> _open(PendingApproval p) async {
+    final at = widget.user.token.accessToken;
+    if (at == null) return;
     await showDialog<void>(
       context: context,
       barrierDismissible: true, // カード起点なので操作せず閉じられてよい。
-      builder: (_) => ApprovalDialog(pending: p),
+      builder: (_) => ApprovalDialog(pending: p, accessToken: at),
     );
     _refresh(); // 承認/拒否/閉じる後に一覧を更新
   }

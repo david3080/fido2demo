@@ -6,8 +6,9 @@ import '../providers.dart';
 import 'mandate_view.dart';
 
 class ApprovalDialog extends ConsumerStatefulWidget {
-  const ApprovalDialog({super.key, required this.pending});
+  const ApprovalDialog({super.key, required this.pending, required this.accessToken});
   final PendingApproval pending;
+  final String accessToken;
   @override
   ConsumerState<ApprovalDialog> createState() => _ApprovalDialogState();
 }
@@ -39,7 +40,7 @@ class _ApprovalDialogState extends ConsumerState<ApprovalDialog> {
       _error = null;
     });
     try {
-      await ref.read(cibaApprovalServiceProvider).reject(widget.pending);
+      await ref.read(cibaApprovalServiceProvider).reject(widget.pending, widget.accessToken);
       if (!mounted) return;
       Navigator.of(context).pop();
       ScaffoldMessenger.of(context).showSnackBar(
@@ -56,7 +57,7 @@ class _ApprovalDialogState extends ConsumerState<ApprovalDialog> {
       _error = null;
     });
     try {
-      await ref.read(cibaApprovalServiceProvider).approve(widget.pending);
+      await ref.read(cibaApprovalServiceProvider).approve(widget.pending, widget.accessToken);
       if (!mounted) return;
       Navigator.of(context).pop();
       final msg = (widget.pending.authorizationDetails ?? const []).isNotEmpty

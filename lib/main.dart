@@ -123,7 +123,7 @@ Future<void> main() async {
       store: OidcDefaultStore(),
       httpClient: dpopClient,
       settings: OidcUserManagerSettings(
-        scope: const ['openid', 'profile', 'email', 'offline_access'],
+        scope: const ['openid', 'profile', 'email', 'offline_access', 'ciba:approve'],
         redirectUri: Uri.parse('jp.co.sonrisa.fido2demo://callback'),
         postLogoutRedirectUri: Uri.parse('jp.co.sonrisa.fido2demo://logout'),
         userInfoSettings: const OidcUserInfoSettings(sendUserInfoRequest: true),

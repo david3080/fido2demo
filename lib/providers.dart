@@ -32,9 +32,7 @@ final opEndpointsProvider = Provider<OpEndpoints>(
   (ref) => throw UnimplementedError('override in main()'),
 );
 
-/// CIBA 承認/拒否はパスキー assertion 自体が本人性を証明するため、アプリへの
-/// ログイン（access token）を要しない公開エンドポイント。ログアウト/コールド起動
-/// でも動くよう、token に依存しない素の HTTP クライアントで呼ぶ。
+/// token を付けない素の HTTP クライアント（CIBA の approve 用）。
 final httpClientProvider = Provider<http.Client>((ref) {
   final c = http.Client();
   ref.onDispose(c.close);
@@ -44,10 +42,11 @@ final httpClientProvider = Provider<http.Client>((ref) {
 /// パスキー認証ポート（テストで差し替えるため Provider 経由で注入）。
 final passkeyPortProvider = Provider<PasskeyPort>((ref) => const NativePasskey());
 
-/// CIBA 承認/拒否サービス。公開エンドポイントなので素の httpClient を使う。
+/// CIBA 承認/拒否サービス。passkey-options と reject は DPoP 付き、approve は素の client。
 final cibaApprovalServiceProvider = Provider<CibaApprovalService>((ref) {
   return CibaApprovalService(
     client: ref.watch(httpClientProvider),
+    authClient: ref.watch(dpopClientProvider),
     passkey: ref.watch(passkeyPortProvider),
     opBase: ref.watch(opBaseProvider),
   );

@@ -29,7 +29,7 @@ void main() {
     expect(find.byType(LoginView), findsOneWidget);
   });
 
-  testWidgets('コールド起動の CIBA seed で承認ダイアログを開く', (tester) async {
+  testWidgets('コールド起動の CIBA seed で、ダイアログは開かず届いたことを知らせる', (tester) async {
     // runApp 前に sink へ入った値（initState post-frame で拾う）を模す。
     pendingApprovalSink.value = PendingApproval(
       authReqId: 'AR1',
@@ -51,8 +51,8 @@ void main() {
     for (var i = 0; i < 5; i++) {
       await tester.pump(const Duration(milliseconds: 50));
     }
-    // ログイン画面の上に承認ダイアログが出る。
-    expect(find.text('ログイン承認'), findsOneWidget);
-    expect(find.text('msg'), findsOneWidget);
+    // 承認はカードをタップしてから（古い要求に強制操作させない）。
+    expect(find.text('新しい承認要求が届きました'), findsOneWidget);
+    expect(find.text('サインインの承認'), findsNothing);
   });
 }

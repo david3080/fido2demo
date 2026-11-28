@@ -27,7 +27,7 @@ void main() {
   test('approve: options→passkey→approve の順に呼び、assertion を送る', () async {
     final calls = <String>[];
     final client = MockClient((req) async {
-      calls.add('${req.method} ${req.url.path}');
+      calls.add('${req.method} ${req.url.path} ${req.headers['Authorization']}');
       if (req.url.path.endsWith('/passkey-options')) {
         return http.Response('{"challenge":"c"}', 200);
       }
@@ -41,13 +41,14 @@ void main() {
     });
     final svc = CibaApprovalService(
       client: client,
+      authClient: client,
       passkey: _FakePasskey({'id': 'CID', 'response': {'x': 1}}),
       opBase: 'https://op',
     );
-    await svc.approve(_pending());
+    await svc.approve(_pending(), 'AT');
     expect(calls, [
-      'POST /oidc/ciba/AR1/passkey-options',
-      'POST /oidc/ciba/AR1/approve',
+      'POST /oidc/ciba/AR1/passkey-options Bearer AT',
+      'POST /oidc/ciba/AR1/approve null',
     ]);
   });
 
@@ -56,10 +57,11 @@ void main() {
     final client = MockClient((req) async => http.Response('login required', 401));
     final svc = CibaApprovalService(
       client: client,
+      authClient: client,
       passkey: _FakePasskey(null, error: StateError('should not be called')),
       opBase: 'https://op',
     );
-    expect(() => svc.approve(_pending()), throwsA(isA<CibaApprovalException>()));
+    expect(() => svc.approve(_pending(), 'AT'), throwsA(isA<CibaApprovalException>()));
     expect(passkeyCalled, false);
   });
 
@@ -67,10 +69,11 @@ void main() {
     final client = MockClient((req) async => http.Response('{}', 200));
     final svc = CibaApprovalService(
       client: client,
+      authClient: client,
       passkey: _FakePasskey(null, error: Exception('user cancelled')),
       opBase: 'https://op',
     );
-    expect(() => svc.approve(_pending()), throwsA(isA<Exception>()));
+    expect(() => svc.approve(_pending(), 'AT'), throwsA(isA<Exception>()));
   });
 
   test('approve: 後発が 409 already handled のとき例外(先勝ち負け)', () async {
@@ -80,35 +83,40 @@ void main() {
     });
     final svc = CibaApprovalService(
       client: client,
+      authClient: client,
       passkey: _FakePasskey({'id': 'x', 'response': {}}),
       opBase: 'https://op',
     );
     expect(
-      () => svc.approve(_pending()),
+      () => svc.approve(_pending(), 'AT'),
       throwsA(predicate((e) => e.toString().contains('409'))),
     );
   });
 
-  test('reject: 204 で成功', () async {
+  test('reject: token 付きの authClient で呼び、204 で成功', () async {
+    final plain = MockClient((req) async => http.Response('unexpected', 500));
     final client = MockClient((req) async {
       expect(req.url.path, '/oidc/ciba/AR1/reject');
+      expect(req.headers['Authorization'], 'Bearer AT');
       return http.Response('', 204);
     });
     final svc = CibaApprovalService(
-      client: client,
+      client: plain,
+      authClient: client,
       passkey: _FakePasskey(const {}),
       opBase: 'https://op',
     );
-    await svc.reject(_pending());
+    await svc.reject(_pending(), 'AT');
   });
 
   test('reject: 204 以外は例外', () async {
     final client = MockClient((req) async => http.Response('err', 500));
     final svc = CibaApprovalService(
       client: client,
+      authClient: client,
       passkey: _FakePasskey(const {}),
       opBase: 'https://op',
     );
-    expect(() => svc.reject(_pending()), throwsA(isA<CibaApprovalException>()));
+    expect(() => svc.reject(_pending(), 'AT'), throwsA(isA<CibaApprovalException>()));
   });
 }

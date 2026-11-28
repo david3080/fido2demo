@@ -25,10 +25,14 @@ PendingApproval _pending() => PendingApproval(
 Widget _host({required http.Client client, required PasskeyPort passkey}) {
   return ProviderScope(
     overrides: [
-      httpClientProvider.overrideWithValue(client),
-      passkeyPortProvider.overrideWithValue(passkey),
+      cibaApprovalServiceProvider.overrideWithValue(CibaApprovalService(
+        client: client,
+        authClient: client,
+        passkey: passkey,
+        opBase: 'https://op',
+      )),
     ],
-    child: MaterialApp(home: Scaffold(body: ApprovalDialog(pending: _pending()))),
+    child: MaterialApp(home: Scaffold(body: ApprovalDialog(pending: _pending(), accessToken: 'AT'))),
   );
 }
 
@@ -65,8 +69,12 @@ void main() {
     // showDialog 経由で出して pop を検証する。
     await tester.pumpWidget(ProviderScope(
       overrides: [
-        httpClientProvider.overrideWithValue(client),
-        passkeyPortProvider.overrideWithValue(_FakePasskey(const {})),
+        cibaApprovalServiceProvider.overrideWithValue(CibaApprovalService(
+          client: client,
+          authClient: client,
+          passkey: _FakePasskey(const {}),
+          opBase: 'https://op',
+        )),
       ],
       child: MaterialApp(
         home: Scaffold(
@@ -74,7 +82,7 @@ void main() {
             builder: (ctx) => ElevatedButton(
               onPressed: () => showDialog<void>(
                 context: ctx,
-                builder: (_) => ApprovalDialog(pending: _pending()),
+                builder: (_) => ApprovalDialog(pending: _pending(), accessToken: 'AT'),
               ),
               child: const Text('open'),
             ),
@@ -84,10 +92,10 @@ void main() {
     ));
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
-    expect(find.text('ログイン承認'), findsOneWidget); // ダイアログが開いた
+    expect(find.text('サインインの承認'), findsOneWidget); // ダイアログが開いた
     await tester.tap(find.text('拒否'));
     await tester.pumpAndSettle();
-    expect(find.text('ログイン承認'), findsNothing); // 閉じた
+    expect(find.text('サインインの承認'), findsNothing); // 閉じた
   });
 
   testWidgets('mandate がある時はタイトルを 操作の承認 にし MandateView を出す', (tester) async {
@@ -108,13 +116,17 @@ void main() {
     );
     await tester.pumpWidget(ProviderScope(
       overrides: [
-        httpClientProvider.overrideWithValue(MockClient((_) async => http.Response('', 200))),
-        passkeyPortProvider.overrideWithValue(_FakePasskey(const {})),
+        cibaApprovalServiceProvider.overrideWithValue(CibaApprovalService(
+          client: MockClient((_) async => http.Response('', 200)),
+          authClient: MockClient((_) async => http.Response('', 200)),
+          passkey: _FakePasskey(const {}),
+          opBase: 'https://op',
+        )),
       ],
-      child: MaterialApp(home: Scaffold(body: ApprovalDialog(pending: pending))),
+      child: MaterialApp(home: Scaffold(body: ApprovalDialog(pending: pending, accessToken: 'AT'))),
     ));
     expect(find.text('操作の承認'), findsOneWidget);
-    expect(find.text('ログイン承認'), findsNothing);
+    expect(find.text('サインインの承認'), findsNothing);
     // MandateView の中身が出ている
     expect(find.text('500'), findsOneWidget);
     expect(find.text('PT'), findsOneWidget);
