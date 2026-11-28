@@ -44,9 +44,7 @@ dependencies:
   flutter_secure_storage: ^10.2.0
   shared_preferences: ^2.5.3
   dart_dpop:
-    git:
-      url: https://github.com/son-risa/dart_dpop.git
-      ref: v0.3.0
+    path: packages/dart_dpop
   flutter_riverpod: ^3.3.1
 
 dev_dependencies:
