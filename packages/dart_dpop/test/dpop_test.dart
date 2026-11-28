@@ -1,0 +1,243 @@
+// デフォルト ES256 実装は pointycastle (Pure Dart) なので `dart test` で動く。
+// cryptography 版 (CryptographyEs256DpopKey) は Flutter 環境必須なので別途
+// integration_test で確認する。
+
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:dart_dpop/dart_dpop.dart';
+import 'package:http/http.dart' as http;
+import 'package:test/test.dart';
+
+/// 送信された http.Request をそのまま捕捉する fake client。
+/// レスポンスは常に 200 / 空 body を返す。
+class _CapturingClient extends http.BaseClient {
+  _CapturingClient(this.captured);
+  final List<http.Request> captured;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    // request は Request 型でくる前提 (= DpopHttpClient が clone)
+    captured.add(request as http.Request);
+    return http.StreamedResponse(
+      Stream.value(const <int>[]),
+      200,
+      headers: const {},
+    );
+  }
+}
+
+String _padBase64(String s) {
+  final padding = (4 - s.length % 4) % 4;
+  return s + ('=' * padding);
+}
+
+Map<String, dynamic> _decodeJwtPart(String part) =>
+    jsonDecode(utf8.decode(base64Url.decode(_padBase64(part))))
+        as Map<String, dynamic>;
+
+void main() {
+  group('Es256DpopKey', () {
+    test('generates a valid EC P-256 JWK', () async {
+      final key = await Es256DpopKey.generate();
+      final jwk = await key.publicJwk();
+      expect(jwk['kty'], 'EC');
+      expect(jwk['crv'], 'P-256');
+      expect(jwk['x'], isA<String>());
+      expect(jwk['y'], isA<String>());
+    });
+
+    test('JKT is deterministic for the same key', () async {
+      final key = await Es256DpopKey.generate();
+      final jkt1 = await key.jkt;
+      final jkt2 = await key.jkt;
+      expect(jkt1, equals(jkt2));
+    });
+
+    test('different keys produce different JKTs', () async {
+      final k1 = await Es256DpopKey.generate();
+      final k2 = await Es256DpopKey.generate();
+      expect(await k1.jkt, isNot(equals(await k2.jkt)));
+    });
+
+    test('algorithm is ES256', () async {
+      final key = await Es256DpopKey.generate();
+      expect(key.algorithm, DpopAlgorithm.es256);
+      expect(key.algorithm.joseName, 'ES256');
+    });
+  });
+
+  group('DpopProofGenerator', () {
+    test('produces a 3-part JWT with dpop+jwt typ', () async {
+      final key = await Es256DpopKey.generate();
+      final gen = DpopProofGenerator(key: key);
+      final proof = await gen.createProof(
+        htm: 'POST',
+        htu: 'https://example.com/token',
+      );
+      final parts = proof.split('.');
+      expect(parts.length, 3);
+      final header = _decodeJwtPart(parts[0]);
+      expect(header['typ'], 'dpop+jwt');
+      expect(header['alg'], 'ES256');
+      expect(header['jwk']['kty'], 'EC');
+      final payload = _decodeJwtPart(parts[1]);
+      expect(payload['htm'], 'POST');
+      expect(payload['htu'], 'https://example.com/token');
+      expect(payload['iat'], isA<int>());
+      expect(payload['jti'], isA<String>());
+      expect(payload['ath'], isNull);
+      expect(payload['nonce'], isNull);
+    });
+
+    test('htm is normalized to uppercase', () async {
+      final gen =
+          DpopProofGenerator(key: await Es256DpopKey.generate());
+      final proof = await gen.createProof(
+        htm: 'get',
+        htu: 'https://example.com/x',
+      );
+      final payload = _decodeJwtPart(proof.split('.')[1]);
+      expect(payload['htm'], 'GET');
+    });
+
+    test('ath claim is set when accessToken provided', () async {
+      final gen =
+          DpopProofGenerator(key: await Es256DpopKey.generate());
+      final proof = await gen.createProof(
+        htm: 'GET',
+        htu: 'https://example.com/me',
+        accessToken: 'sometoken',
+      );
+      final payload = _decodeJwtPart(proof.split('.')[1]);
+      expect(payload['ath'], isA<String>());
+    });
+
+    test('nonce claim is set when nonce provided', () async {
+      final gen =
+          DpopProofGenerator(key: await Es256DpopKey.generate());
+      final proof = await gen.createProof(
+        htm: 'POST',
+        htu: 'https://example.com/token',
+        nonce: 'srv-nonce',
+      );
+      final payload = _decodeJwtPart(proof.split('.')[1]);
+      expect(payload['nonce'], 'srv-nonce');
+    });
+
+    test('each call generates a fresh jti and iat', () async {
+      final gen =
+          DpopProofGenerator(key: await Es256DpopKey.generate());
+      final p1 = await gen.createProof(htm: 'POST', htu: 'https://x');
+      await Future<void>.delayed(const Duration(milliseconds: 1100));
+      final p2 = await gen.createProof(htm: 'POST', htu: 'https://x');
+      final j1 = _decodeJwtPart(p1.split('.')[1]);
+      final j2 = _decodeJwtPart(p2.split('.')[1]);
+      expect(j1['jti'], isNot(equals(j2['jti'])));
+      expect(j2['iat'], greaterThanOrEqualTo(j1['iat'] as int));
+    });
+  });
+
+  group('MemoryDpopKeyStore', () {
+    test('load returns null initially', () async {
+      final store = MemoryDpopKeyStore();
+      expect(await store.load(), isNull);
+    });
+
+    test('save and load round-trips', () async {
+      final store = MemoryDpopKeyStore();
+      final key = await Es256DpopKey.generate();
+      await store.save(key);
+      expect(await store.load(), equals(key));
+    });
+
+    test('clear removes the key', () async {
+      final store = MemoryDpopKeyStore();
+      await store.save(await Es256DpopKey.generate());
+      await store.clear();
+      expect(await store.load(), isNull);
+    });
+  });
+
+  group('DpopHttpClient Bearer→DPoP 自動変換', () {
+    test('Authorization: Bearer ヘッダから access_token を抽出し DPoP に変換', () async {
+      final captured = <http.Request>[];
+      final fake = _CapturingClient(captured);
+      final gen = DpopProofGenerator(key: await Es256DpopKey.generate());
+      final client = DpopHttpClient(generator: gen, inner: fake);
+      await client.get(
+        Uri.parse('https://example.com/me'),
+        headers: {'Authorization': 'Bearer abc.def.ghi'},
+      );
+      final sent = captured.single;
+      expect(sent.headers['Authorization'], 'DPoP abc.def.ghi');
+      expect(sent.headers['DPoP'], isNotEmpty);
+      final payload = _decodeJwtPart(sent.headers['DPoP']!.split('.')[1]);
+      // ath = base64url(SHA-256("abc.def.ghi")) のはず
+      expect(payload['ath'], isA<String>());
+    });
+
+    test('Authorization: Basic は尊重して触らない (cibademo の token endpoint 形式)',
+        () async {
+      final captured = <http.Request>[];
+      final fake = _CapturingClient(captured);
+      final gen = DpopProofGenerator(key: await Es256DpopKey.generate());
+      final client = DpopHttpClient(generator: gen, inner: fake);
+      await client.post(
+        Uri.parse('https://example.com/token'),
+        headers: {'Authorization': 'Basic Y2lkOnNlYw=='},
+        body: 'grant_type=client_credentials',
+      );
+      final sent = captured.single;
+      expect(sent.headers['Authorization'], 'Basic Y2lkOnNlYw==');
+      expect(sent.headers['DPoP'], isNotEmpty);
+      // accessToken は無いので ath は付かない
+      final payload = _decodeJwtPart(sent.headers['DPoP']!.split('.')[1]);
+      expect(payload['ath'], isNull);
+    });
+
+    test('Authorization ヘッダが無い場合は accessTokenProvider に fallback', () async {
+      final captured = <http.Request>[];
+      final fake = _CapturingClient(captured);
+      final gen = DpopProofGenerator(key: await Es256DpopKey.generate());
+      final client = DpopHttpClient(
+        generator: gen,
+        inner: fake,
+        accessTokenProvider: () async => 'provided-token',
+      );
+      await client.get(Uri.parse('https://example.com/me'));
+      final sent = captured.single;
+      expect(sent.headers['Authorization'], 'DPoP provided-token');
+    });
+  });
+
+  group('loadOrCreateDpopKey', () {
+    test('creates a new key when store is empty', () async {
+      final store = MemoryDpopKeyStore();
+      var called = 0;
+      final key = await loadOrCreateDpopKey(
+        store: store,
+        keyFactory: () async {
+          called++;
+          return Es256DpopKey.generate();
+        },
+      );
+      expect(called, 1);
+      expect(await store.load(), equals(key));
+    });
+
+    test('returns existing key without calling factory', () async {
+      final store = MemoryDpopKeyStore();
+      await store.save(await Es256DpopKey.generate());
+      var called = 0;
+      await loadOrCreateDpopKey(
+        store: store,
+        keyFactory: () async {
+          called++;
+          return Es256DpopKey.generate();
+        },
+      );
+      expect(called, 0);
+    });
+  });
+}
